@@ -6,7 +6,7 @@
  *******************************************************************************/
 package org.cryptomator.launcher;
 
-import org.cryptomator.ui.launcher.AppLaunchEvent;
+import org.jetbrains.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,12 +20,10 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
-import java.util.stream.Collectors;
 
 @Singleton
 class FileOpenRequestHandler {
@@ -51,7 +49,7 @@ class FileOpenRequestHandler {
 		handleLaunchArgs(FileSystems.getDefault(), args);
 	}
 
-	// visible for testing
+	@VisibleForTesting
 	void handleLaunchArgs(FileSystem fs, List<String> args) {
 		Collection<Path> pathsToOpen = args.stream().map(str -> {
 			try {

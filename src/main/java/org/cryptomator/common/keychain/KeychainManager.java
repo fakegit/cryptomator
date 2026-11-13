@@ -1,8 +1,8 @@
 package org.cryptomator.common.keychain;
 
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import org.cryptomator.common.Passphrase;
 import org.cryptomator.integrations.keychain.KeychainAccessException;
 import org.cryptomator.integrations.keychain.KeychainAccessProvider;
 
@@ -14,20 +14,25 @@ import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Singleton
 public class KeychainManager implements KeychainAccessProvider {
 
 	private final ObjectExpression<KeychainAccessProvider> keychain;
 	private final LoadingCache<String, BooleanProperty> passphraseStoredProperties;
+	private final ReentrantReadWriteLock lock;
 
 	@Inject
 	KeychainManager(ObjectExpression<KeychainAccessProvider> selectedKeychain) {
 		this.keychain = selectedKeychain;
-		this.passphraseStoredProperties = CacheBuilder.newBuilder() //
-				.weakValues() //
-				.build(CacheLoader.from(this::createStoredPassphraseProperty));
+		this.passphraseStoredProperties = Caffeine.newBuilder() //
+				.softValues() //
+				.build(this::createStoredPassphraseProperty);
 		keychain.addListener(ignored -> passphraseStoredProperties.invalidateAll());
+		this.lock = new ReentrantReadWriteLock(false);
 	}
 
 	private KeychainAccessProvider getKeychainOrFail() throws KeychainAccessException {
@@ -39,33 +44,49 @@ public class KeychainManager implements KeychainAccessProvider {
 	}
 
 	@Override
-	public String displayName() {
-		return getClass().getName();
-	}
-
-	@Override
-	public void storePassphrase(String key, CharSequence passphrase) throws KeychainAccessException {
-		getKeychainOrFail().storePassphrase(key, passphrase);
+	public void storePassphrase(String key, String displayName, CharSequence passphrase) throws KeychainAccessException {
+		try {
+			lock.writeLock().lock();
+			getKeychainOrFail().storePassphrase(key, displayName, passphrase);
+		} finally {
+			lock.writeLock().unlock();
+		}
 		setPassphraseStored(key, true);
 	}
 
 	@Override
 	public char[] loadPassphrase(String key) throws KeychainAccessException {
-		char[] passphrase = getKeychainOrFail().loadPassphrase(key);
+		char[] passphrase = null;
+		try {
+			lock.readLock().lock();
+			passphrase = getKeychainOrFail().loadPassphrase(key);
+		} finally {
+			lock.readLock().unlock();
+		}
 		setPassphraseStored(key, passphrase != null);
 		return passphrase;
 	}
 
 	@Override
 	public void deletePassphrase(String key) throws KeychainAccessException {
-		getKeychainOrFail().deletePassphrase(key);
+		try {
+			lock.writeLock().lock();
+			getKeychainOrFail().deletePassphrase(key);
+		} finally {
+			lock.writeLock().unlock();
+		}
 		setPassphraseStored(key, false);
 	}
 
 	@Override
-	public void changePassphrase(String key, CharSequence passphrase) throws KeychainAccessException {
+	public void changePassphrase(String key, String displayName, CharSequence passphrase) throws KeychainAccessException {
 		if (isPassphraseStored(key)) {
-			getKeychainOrFail().changePassphrase(key, passphrase);
+			try {
+				lock.writeLock().lock();
+				getKeychainOrFail().changePassphrase(key, displayName, passphrase);
+			} finally {
+				lock.writeLock().unlock();
+			}
 			setPassphraseStored(key, true);
 		}
 	}
@@ -102,13 +123,11 @@ public class KeychainManager implements KeychainAccessProvider {
 	}
 
 	private void setPassphraseStored(String key, boolean value) {
-		BooleanProperty property = passphraseStoredProperties.getIfPresent(key);
-		if (property != null) {
-			if (Platform.isFxApplicationThread()) {
-				property.set(value);
-			} else {
-				Platform.runLater(() -> property.set(value));
-			}
+		BooleanProperty property = passphraseStoredProperties.get(key, _ -> new SimpleBooleanProperty(value));
+		if (Platform.isFxApplicationThread()) {
+			property.set(value);
+		} else {
+			Platform.runLater(() -> property.set(value));
 		}
 	}
 
@@ -124,7 +143,7 @@ public class KeychainManager implements KeychainAccessProvider {
 	 * @see #isPassphraseStored(String)
 	 */
 	public ReadOnlyBooleanProperty getPassphraseStoredProperty(String key) {
-		return passphraseStoredProperties.getUnchecked(key);
+		return passphraseStoredProperties.get(key);
 	}
 
 	private BooleanProperty createStoredPassphraseProperty(String key) {
@@ -135,4 +154,74 @@ public class KeychainManager implements KeychainAccessProvider {
 		}
 	}
 
+	public ObjectExpression<KeychainAccessProvider> getKeychainImplementation() {
+		return this.keychain;
+	}
+
+	public static void migrate(KeychainAccessProvider oldProvider, KeychainAccessProvider newProvider, Map<String, String> idsAndNames) throws KeychainAccessException {
+		if (oldProvider instanceof KeychainManager || newProvider instanceof KeychainManager) {
+			throw new IllegalArgumentException("KeychainManger must not be the source or target of migration");
+		}
+		var migrated = new LinkedHashMap<String, Passphrase>();
+		try {
+			for (var entry : idsAndNames.entrySet()) {
+				var passphrase = move(oldProvider, newProvider, entry.getKey(), entry.getValue());
+				if (passphrase != null) {
+					migrated.put(entry.getKey(), passphrase);
+				}
+			}
+		} catch (KeychainAccessException | RuntimeException e) {
+			for (var entry : migrated.entrySet()) {
+				moveBack(newProvider, oldProvider, entry.getKey(), idsAndNames.get(entry.getKey()), entry.getValue(), e);
+			}
+			throw e;
+		} finally {
+			migrated.values().forEach(Passphrase::destroy);
+		}
+	}
+
+	// returns the moved passphrase, which the caller must destroy, or null if the source has none
+	private static Passphrase move(KeychainAccessProvider source, KeychainAccessProvider target, String key, String displayName) throws KeychainAccessException {
+		var loaded = source.loadPassphrase(key);
+		if (loaded == null) {
+			return null;
+		}
+		var passphrase = new Passphrase(loaded);
+		try {
+			source.deletePassphrase(key); // delete before storing: both providers may address the same keychain item (e.g., Touch ID and regular keychain on macOS), so deleting afterwards would remove the moved entry
+			storeOrRestore(source, target, key, displayName, passphrase);
+		} catch (KeychainAccessException | RuntimeException e) {
+			passphrase.destroy();
+			throw e;
+		}
+		return passphrase;
+	}
+
+	// restores from the retained copy, since the new provider may no longer be readable after the failure
+	private static void moveBack(KeychainAccessProvider newProvider, KeychainAccessProvider oldProvider, String key, String displayName, Passphrase passphrase, Exception failure) {
+		try {
+			newProvider.deletePassphrase(key);
+		} catch (KeychainAccessException | RuntimeException deleteException) {
+			failure.addSuppressed(deleteException);
+		}
+		try {
+			storeOrRestore(newProvider, oldProvider, key, displayName, passphrase);
+		} catch (KeychainAccessException | RuntimeException restoreException) {
+			failure.addSuppressed(restoreException);
+		}
+	}
+
+	// if the target refuses the passphrase, try to put it back into the source, so the entry isn't lost from both
+	private static void storeOrRestore(KeychainAccessProvider source, KeychainAccessProvider target, String key, String displayName, Passphrase passphrase) throws KeychainAccessException {
+		try {
+			target.storePassphrase(key, displayName, passphrase);
+		} catch (KeychainAccessException | RuntimeException e) {
+			try {
+				source.storePassphrase(key, displayName, passphrase);
+			} catch (KeychainAccessException | RuntimeException restoreException) {
+				e.addSuppressed(restoreException);
+			}
+			throw e;
+		}
+	}
 }

@@ -1,11 +1,14 @@
 #!/bin/bash
 
 # parse options
-usage() { echo "Usage: $0 [-s <codesign-identity>]" 1>&2; exit 1; }
-while getopts ":s:" o; do
+usage() { echo "Usage: $0 [-s <codesign-identity>] [-t <team-identifier>]" 1>&2; exit 1; }
+while getopts ":s:t:" o; do
     case "${o}" in
         s)
             CODESIGN_IDENTITY=${OPTARG}
+            ;;
+        t)
+            TEAM_IDENTIFIER=${OPTARG}
             ;;
         *)
             usage
@@ -14,34 +17,89 @@ while getopts ":s:" o; do
 done
 shift "$((OPTIND-1))"
 
-# prepare working dir and variables
+# prepare working dir
 cd $(dirname $0)
-rm -rf runtime dmg
+rm -rf runtime dmg *.app *.dmg
+
+# set variables
+APP_NAME="Cryptomator"
+VENDOR="Skymatic GmbH"
+COPYRIGHT_YEARS="2016 - $(date +%Y)"
+PACKAGE_IDENTIFIER="org.cryptomator"
+MAIN_JAR_GLOB="cryptomator-*.jar"
+MODULE_AND_MAIN_CLASS="org.cryptomator.desktop/org.cryptomator.launcher.Cryptomator"
 REVISION_NO=`git rev-list --count HEAD`
-VERSION_NO=`mvn -f../../../pom.xml help:evaluate -Dexpression=project.version -q -DforceStdout | sed -rn 's/.*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p'`
+VERSION_NO=`../../../mvnw -f../../../pom.xml help:evaluate -Dexpression=project.version -q -DforceStdout | sed -rn 's/.*([0-9]+\.[0-9]+\.[0-9]+).*/\1/p'`
+FUSE_LIB="FUSE-T"
+
+JAVAFX_VERSION=25.0.5
+JAVAFX_ARCH="undefined"
+JAVAFX_JMODS_SHA256="undefined"
+if [ "$(machine)" = "arm64e" ]; then
+    JAVAFX_ARCH="aarch64"
+    JAVAFX_JMODS_SHA256="2a05b5d236c10eb74a366638cf908ddebfa36795695c8b1f2734f2169d54b128"
+else
+    JAVAFX_ARCH="x64"
+    JAVAFX_JMODS_SHA256="c50de3b8ed05385c452557bf0ac66682d73c597f224f056c091d825cb4224456"
+fi
+JAVAFX_JMODS_URL="https://download2.gluonhq.com/openjfx/${JAVAFX_VERSION}/openjfx-${JAVAFX_VERSION}_osx-${JAVAFX_ARCH}_bin-jmods.zip"
 
 # check preconditions
 if [ -z "${JAVA_HOME}" ]; then echo "JAVA_HOME not set. Run using JAVA_HOME=/path/to/jdk ./build.sh"; exit 1; fi
-command -v mvn >/dev/null 2>&1 || { echo >&2 "mvn not found."; exit 1; }
-command -v create-dmg >/dev/null 2>&1 || { echo >&2 "create-dmg not found."; exit 1; }
+[ -x ../../../mvnw ] || { echo >&2 "mvnw not found at ../../../mvnw."; exit 1; }
+command -v create-dmg >/dev/null 2>&1 || { echo >&2 "create-dmg not found. Fix by 'brew install create-dmg'."; exit 1; }
 if [ -n "${CODESIGN_IDENTITY}" ]; then
     command -v codesign >/dev/null 2>&1 || { echo >&2 "codesign not found. Fix by 'xcode-select --install'."; exit 1; }
     if [[ ! `security find-identity -v -p codesigning | grep -w "${CODESIGN_IDENTITY}"` ]]; then echo "Given codesign identity is invalid."; exit 1; fi
 fi
+if [ -n "${CODESIGN_IDENTITY}" ] && [ -n "${TEAM_IDENTIFIER}" ]; then
+    ../verify-provisioning-profile.sh ../embedded.provisionprofile "${TEAM_IDENTIFIER}.${PACKAGE_IDENTIFIER}" com.apple.developer.fskit.mount || exit 1
+fi
+if [ -n "${CODESIGN_IDENTITY}" ] && [ -n "${TEAM_IDENTIFIER}" ] && [ "${JAVAFX_ARCH}" = "aarch64" ]; then
+    [ -f ../fskit-extension.provisionprofile ] || { echo >&2 "FSKit extension provisioning profile not found at dist/mac/fskit-extension.provisionprofile."; exit 1; }
+    ../verify-provisioning-profile.sh ../fskit-extension.provisionprofile "${TEAM_IDENTIFIER}.${PACKAGE_IDENTIFIER}.fskit" com.apple.developer.fskit.fsmodule || exit 1
+fi
+
+# download and check jmods
+curl -L ${JAVAFX_JMODS_URL} -o openjfx-jmods.zip
+echo "${JAVAFX_JMODS_SHA256}  openjfx-jmods.zip" | shasum -a256 --check
+mkdir -p openjfx-jmods/
+unzip -jo openjfx-jmods.zip \*/javafx.base.jmod \*/javafx.controls.jmod \*/javafx.fxml.jmod \*/javafx.graphics.jmod -d openjfx-jmods
+JMOD_VERSION=$(jmod describe openjfx-jmods/javafx.base.jmod | head -1)
+JMOD_VERSION=${JMOD_VERSION#*@}
+JMOD_VERSION=${JMOD_VERSION%%.*}
+POM_JFX_VERSION=$(../../../mvnw -f../../../pom.xml help:evaluate "-Dexpression=javafx.version" -q -DforceStdout)
+POM_JFX_VERSION=${POM_JFX_VERSION#*@}
+POM_JFX_VERSION=${POM_JFX_VERSION%%.*}
+
+if [ "${POM_JFX_VERSION}" -ne "${JMOD_VERSION}" ]; then
+    >&2 echo "Major JavaFX version in pom.xml (${POM_JFX_VERSION}) != jmod version (${JMOD_VERSION})"
+    exit 1
+fi
 
 # compile
-mvn -B -f../../../pom.xml clean package -DskipTests -Pmac
-cp ../../../target/cryptomator-*.jar ../../../target/mods
+../../../mvnw -B -f../../../pom.xml clean package -DskipTests -Pmac
+cp ../../../LICENSE.txt ../../../target
+cp ../../../target/${MAIN_JAR_GLOB} ../../../target/mods
 
-# add runtime
+# create runtime
+## check for JEP 493
+JMOD_PATHS="openjfx-jmods"
+if ! ${JAVA_HOME}/bin/jlink --help | grep -q "Linking from run-time image enabled"; then
+    JMOD_PATHS="${JAVA_HOME}/jmods:${JMOD_PATHS}"
+fi
+## create custom runtime
 ${JAVA_HOME}/bin/jlink \
     --output runtime \
-    --module-path "${JAVA_HOME}/jmods" \
-    --add-modules java.base,java.desktop,java.logging,java.naming,java.net.http,java.scripting,java.sql,java.xml,jdk.unsupported,jdk.crypto.ec,jdk.accessibility \
+    --module-path "${JMOD_PATHS}" \
+    --add-modules java.base,java.desktop,java.instrument,java.logging,java.naming,java.net.http,java.scripting,java.sql,java.xml,javafx.base,javafx.graphics,javafx.controls,javafx.fxml,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported,jdk.security.auth,jdk.accessibility,jdk.management.jfr,java.compiler \
+    --strip-native-commands \
     --no-header-files \
     --no-man-pages \
     --strip-debug \
-    --compress=1
+    --compress zip-0
+## remove distrusted CA certificates from runtime
+${JAVA_HOME}/bin/java ../../common/RemoveDistrustedCaCerts.java runtime/lib/security/cacerts
 
 # create app dir
 ${JAVA_HOME}/bin/jpackage \
@@ -50,73 +108,124 @@ ${JAVA_HOME}/bin/jpackage \
     --runtime-image runtime \
     --input ../../../target/libs \
     --module-path ../../../target/mods \
-    --module org.cryptomator.desktop/org.cryptomator.launcher.Cryptomator \
+    --module ${MODULE_AND_MAIN_CLASS} \
     --dest . \
-    --name Cryptomator \
-    --vendor "Skymatic GmbH" \
-    --copyright "(C) 2016 - 2021 Skymatic GmbH" \
+    --name ${APP_NAME} \
+    --vendor "${VENDOR}" \
+    --copyright "(C) ${COPYRIGHT_YEARS} ${VENDOR}" \
+    --app-version "${VERSION_NO}" \
+    --java-options "--enable-preview" \
+    --java-options "--enable-native-access=javafx.graphics,org.cryptomator.frontend.fuse,org.cryptomator.jfuse.mac,org.cryptomator.frontend.fskit" \
     --java-options "-Xss5m" \
     --java-options "-Xmx256m" \
-    --java-options "-Dcryptomator.appVersion=\"${VERSION_NO}\"" \
-    --app-version "${VERSION_NO}" \
     --java-options "-Dfile.encoding=\"utf-8\"" \
-    --java-options "-Dapple.awt.enableTemplateImages=true" \
-    --java-options "-Dcryptomator.logDir=\"~/Library/Logs/Cryptomator\"" \
-    --java-options "-Dcryptomator.pluginDir=\"~/Library/Application Support/Cryptomator/Plugins\"" \
-    --java-options "-Dcryptomator.settingsPath=\"~/Library/Application Support/Cryptomator/settings.json\"" \
-    --java-options "-Dcryptomator.ipcSocketPath=\"~/Library/Application Support/Cryptomator/ipc.socket\"" \
+    --java-options "-Djava.net.useSystemProxies=true" \
+    --java-options "-Dsun.java2d.metal=true" \
+    --java-options "-Dcryptomator.appVersion=\"${VERSION_NO}\"" \
+    --java-options "-Dcryptomator.adminConfigPath=\"/Library/Application Support/Cryptomator/config.properties\"" \
+    --java-options "-Dcryptomator.logDir=\"@{userhome}/Library/Logs/${APP_NAME}\"" \
+    --java-options "-XX:ErrorFile=/cryptomator/cryptomator_crash.log" \
+    --java-options "-Dcryptomator.settingsPath=\"@{userhome}/Library/Application Support/${APP_NAME}/settings.json\"" \
+    --java-options "-Dcryptomator.ipcSocketPath=\"@{userhome}/Library/Application Support/${APP_NAME}/ipc.socket\"" \
+    --java-options "-Dcryptomator.p12Path=\"@{userhome}/Library/Application Support/${APP_NAME}/key.p12\"" \
+    --java-options "-Dcryptomator.integrationsMac.keychainServiceName=\"${APP_NAME}\"" \
+    --java-options "-Dcryptomator.mountPointsDir=\"@{userhome}/Library/Application Support${APP_NAME}/mnt\"" \
     --java-options "-Dcryptomator.showTrayIcon=true" \
+    --java-options "-Dcryptomator.updateMechanism=org.cryptomator.macos.update.DmgUpdateMechanism" \
     --java-options "-Dcryptomator.buildNumber=\"dmg-${REVISION_NO}\"" \
-    --mac-package-identifier org.cryptomator \
+    --java-options "-Dcryptomator.publishTimestamp=\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"" \
+    --java-options "-Dcryptomator.hub.enableTrustOnFirstUse=true" \
+    --mac-package-identifier ${PACKAGE_IDENTIFIER} \
     --resource-dir ../resources
 
 # transform app dir
-cp ../resources/Cryptomator-Vault.icns Cryptomator.app/Contents/Resources/
-sed -i '' "s|###BUNDLE_SHORT_VERSION_STRING###|${VERSION_NO}|g" Cryptomator.app/Contents/Info.plist
-sed -i '' "s|###BUNDLE_VERSION###|${REVISION_NO}|g" Cryptomator.app/Contents/Info.plist
+cp ../resources/${APP_NAME}-Vault.icns ${APP_NAME}.app/Contents/Resources/
+cp ../resources/Assets.car ${APP_NAME}.app/Contents/Resources/
+sed -i '' "s|###BUNDLE_SHORT_VERSION_STRING###|${VERSION_NO}|g" ${APP_NAME}.app/Contents/Info.plist
+sed -i '' "s|###BUNDLE_VERSION###|${REVISION_NO}|g" ${APP_NAME}.app/Contents/Info.plist
+cp ../embedded.provisionprofile ${APP_NAME}.app/Contents/
+
+# generate license
+sed -e 's|###FONT_NAME###|Helvetica|g' -e 's|###FONT_SIZE###|24|g' -e 's|###WITH_WINFSP###|false|g' -e "s|###COPYRIGHT_END_YEAR###|$(date +%Y)|g" \
+    ../../common/licenseTemplate.template.ftl > resources/licenseTemplate.ftl
+../../../mvnw -B -f../../../pom.xml license:add-third-party \
+    -Dlicense.thirdPartyFilename=license.rtf \
+    -Dlicense.outputDirectory=dist/mac/dmg/resources \
+    -Dlicense.fileTemplate=resources/licenseTemplate.ftl \
+    -Dlicense.includedScopes=compile \
+    -Dlicense.excludedGroups=^org\.cryptomator \
+    -Dlicense.failOnMissing=true
 
 # codesign
-if [ -n "${CODESIGN_IDENTITY}" ]; then
-    find Cryptomator.app/Contents/runtime/Contents/MacOS -name '*.dylib' -exec codesign --force -s ${CODESIGN_IDENTITY} {} \;
-    for JAR_PATH in `find Cryptomator.app -name "*.jar"`; do
+if [ -n "${CODESIGN_IDENTITY}" ] && [ -n "${TEAM_IDENTIFIER}" ]; then
+    echo "Codesigning jdk files..."
+    find ${APP_NAME}.app/Contents/runtime/Contents/Home/lib/ -name '*.dylib' -exec codesign --force -s "${CODESIGN_IDENTITY}" {} + || exit 1
+    find ${APP_NAME}.app/Contents/runtime/Contents/Home/lib/ -name 'jspawnhelper' -exec codesign --force -o runtime -s "${CODESIGN_IDENTITY}" {} + || exit 1
+    echo "Codesigning jar contents..."
+    find ${APP_NAME}.app/Contents/runtime/Contents/MacOS -name '*.dylib' -exec codesign --force -s "${CODESIGN_IDENTITY}" {} + || exit 1
+    for JAR_PATH in `find ${APP_NAME}.app -name "*.jar"`; do
     if [[ `unzip -l ${JAR_PATH} | grep '.dylib\|.jnilib'` ]]; then
         JAR_FILENAME=$(basename ${JAR_PATH})
         OUTPUT_PATH=${JAR_PATH%.*}
         echo "Codesigning libs in ${JAR_FILENAME}..."
-        unzip -q ${JAR_PATH} -d ${OUTPUT_PATH}
-        find ${OUTPUT_PATH} -name '*.dylib' -exec codesign --force -s ${CODESIGN_IDENTITY} {} \;
-        find ${OUTPUT_PATH} -name '*.jnilib' -exec codesign --force -s ${CODESIGN_IDENTITY} {} \;
+        unzip -q ${JAR_PATH} -d ${OUTPUT_PATH} || exit 1
+        find ${OUTPUT_PATH} -name '*.dylib' -exec codesign --force -s "${CODESIGN_IDENTITY}" {} + || exit 1
+        find ${OUTPUT_PATH} -name '*.jnilib' -exec codesign --force -s "${CODESIGN_IDENTITY}" {} + || exit 1
         rm ${JAR_PATH}
         pushd ${OUTPUT_PATH} > /dev/null
-        zip -qr ../${JAR_FILENAME} *
+        zip -qr ../${JAR_FILENAME} * || exit 1
         popd > /dev/null
         rm -r ${OUTPUT_PATH}
     fi
     done
-    echo "Codesigning Cryptomator.app..."
-    codesign --force --deep --entitlements ../Cryptomator.entitlements -o runtime -s ${CODESIGN_IDENTITY} Cryptomator.app
+    echo "Codesigning ${APP_NAME}.app..."
+    cp ../${APP_NAME}.entitlements .
+    sed -i '' "s|###APP_IDENTIFIER_PREFIX###|${TEAM_IDENTIFIER}.|g" ${APP_NAME}.entitlements
+    sed -i '' "s|###TEAM_IDENTIFIER###|${TEAM_IDENTIFIER}|g" ${APP_NAME}.entitlements
+    codesign --force --deep --entitlements ${APP_NAME}.entitlements -o runtime -s "${CODESIGN_IDENTITY}" ${APP_NAME}.app || exit 1
+    if [ "${JAVAFX_ARCH}" = "aarch64" ]; then
+        echo "Embedding FSKit extension..."
+        APPEX_PATH=${APP_NAME}.app/Contents/Extensions/FSKitNioExtension.appex
+        ditto -x -k ../../../target/fskit-extension.zip ${APP_NAME}.app/Contents/Extensions || exit 1
+        /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${PACKAGE_IDENTIFIER}.fskit" ${APPEX_PATH}/Contents/Info.plist || exit 1
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION_NO}" ${APPEX_PATH}/Contents/Info.plist || exit 1
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${REVISION_NO}" ${APPEX_PATH}/Contents/Info.plist || exit 1
+        cp ../fskit-extension.provisionprofile ${APPEX_PATH}/Contents/embedded.provisionprofile || exit 1
+        echo "Codesigning FSKit extension..."
+        cp ../FSKitExtension.entitlements . || exit 1
+        sed -i '' "s|###APP_IDENTIFIER_PREFIX###|${TEAM_IDENTIFIER}.|g" FSKitExtension.entitlements || exit 1
+        sed -i '' "s|###TEAM_IDENTIFIER###|${TEAM_IDENTIFIER}|g" FSKitExtension.entitlements || exit 1
+        codesign --force --entitlements FSKitExtension.entitlements -o runtime -s "${CODESIGN_IDENTITY}" ${APPEX_PATH} || exit 1
+        echo "Codesigning ${APP_NAME}.app..."
+        codesign --force --entitlements ${APP_NAME}.entitlements -o runtime -s "${CODESIGN_IDENTITY}" ${APP_NAME}.app || exit 1
+        codesign --verify --deep --strict ${APP_NAME}.app || exit 1
+        codesign --verify --strict ${APPEX_PATH} || exit 1
+    else
+        echo "Leaving out the FSKit extension, which runs on Apple silicon only."
+    fi
+else
+    echo "Leaving out the FSKit extension, which cannot launch unsigned."
 fi
 
 # prepare dmg contents
 mkdir dmg
-mv Cryptomator.app dmg
-cp resources/macFUSE.webloc dmg
+mv ${APP_NAME}.app dmg
+cp resources/${FUSE_LIB}.webloc dmg
 
 # create dmg
 create-dmg \
-    --volname Cryptomator \
-    --volicon "resources/Cryptomator-Volume.icns" \
-    --background "resources/Cryptomator-background.tiff" \
+    --volname ${APP_NAME} \
+    --volicon "resources/${APP_NAME}-Volume.icns" \
+    --background "resources/${APP_NAME}-${FUSE_LIB}-background.tiff" \
     --window-pos 400 100 \
     --window-size 640 694 \
     --icon-size 128 \
-    --icon "Cryptomator.app" 128 245 \
-    --hide-extension "Cryptomator.app" \
-    --icon "macFUSE.webloc" 320 501 \
-    --hide-extension "macFUSE.webloc" \
+    --icon "${APP_NAME}.app" 128 245 \
+    --hide-extension "${APP_NAME}.app" \
+    --icon "${FUSE_LIB}.webloc" 320 501 \
+    --hide-extension "${FUSE_LIB}.webloc" \
     --app-drop-link 512 245 \
     --eula "resources/license.rtf" \
     --icon ".background" 128 758 \
-    --icon ".fseventsd" 320 758 \
     --icon ".VolumeIcon.icns" 512 758 \
-    Cryptomator-${VERSION_NO}.dmg dmg
+    ${APP_NAME}-${VERSION_NO}.dmg dmg

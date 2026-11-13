@@ -2,47 +2,84 @@ package org.cryptomator.common;
 
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
+import org.jetbrains.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.inject.Inject;
-import javax.inject.Singleton;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.time.Instant;
+import java.util.Arrays;
 import java.util.Optional;
+import java.util.Set;
 import java.util.Spliterator;
 import java.util.Spliterators;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-@Singleton
 public class Environment {
 
 	private static final Logger LOG = LoggerFactory.getLogger(Environment.class);
-	private static final Path RELATIVE_HOME_DIR = Paths.get("~");
-	private static final char PATH_LIST_SEP = ':';
 	private static final int DEFAULT_MIN_PW_LENGTH = 8;
+	private static final String SETTINGS_PATH_PROP_NAME = "cryptomator.settingsPath";
+	private static final String IPC_SOCKET_PATH_PROP_NAME = "cryptomator.ipcSocketPath";
+	private static final String KEYCHAIN_PATHS_PROP_NAME = "cryptomator.integrationsWin.keychainPaths";
+	private static final String WINDOWS_HELLO_KEYCHAIN_PATHS_PROP_NAME = "cryptomator.integrationsWin.windowsHelloKeychainPaths";
+	private static final String P12_PATH_PROP_NAME = "cryptomator.p12Path";
+	private static final String LOG_DIR_PROP_NAME = "cryptomator.logDir";
+	private static final String LOOPBACK_ALIAS_PROP_NAME = "cryptomator.loopbackAlias";
+	private static final String MOUNTPOINT_DIR_PROP_NAME = "cryptomator.mountPointsDir";
+	private static final String MIN_PW_LENGTH_PROP_NAME = "cryptomator.minPwLength";
+	private static final String APP_VERSION_PROP_NAME = "cryptomator.appVersion";
+	private static final String BUILD_NUMBER_PROP_NAME = "cryptomator.buildNumber";
+	private static final String PUBLISH_TIMESTAMP_PROP_NAME = "cryptomator.publishTimestamp";
+	private static final String PLUGIN_DIR_PROP_NAME = "cryptomator.pluginDir";
+	private static final String TRAY_ICON_PROP_NAME = "cryptomator.showTrayIcon";
+	private static final String DISABLE_UPDATE_CHECK_PROP_NAME = "cryptomator.disableUpdateCheck";
+	private static final String LICENSE_CHAIN_REQUIRED_CN_PROP_NAME = "cryptomator.licenseChainRequiredCn";
+	private static final String DEFAULT_LICENSE_CHAIN_REQUIRED_CN = "License Intermediate CA (Prod)";
+	public static final String HUB_ALLOWED_HOSTS_PROP_NAME = "cryptomator.hub.allowedHosts";
+	public static final String HUB_TOFU_PROP_NAME = "cryptomator.hub.enableTrustOnFirstUse";
 
-	@Inject
-	public Environment() {
-		LOG.debug("user.home: {}", System.getProperty("user.home"));
-		LOG.debug("java.library.path: {}", System.getProperty("java.library.path"));
-		LOG.debug("user.language: {}", System.getProperty("user.language"));
-		LOG.debug("user.region: {}", System.getProperty("user.region"));
-		LOG.debug("logback.configurationFile: {}", System.getProperty("logback.configurationFile"));
-		LOG.debug("cryptomator.settingsPath: {}", System.getProperty("cryptomator.settingsPath"));
-		LOG.debug("cryptomator.ipcSocketPath: {}", System.getProperty("cryptomator.ipcSocketPath"));
-		LOG.debug("cryptomator.keychainPath: {}", System.getProperty("cryptomator.keychainPath"));
-		LOG.debug("cryptomator.logDir: {}", System.getProperty("cryptomator.logDir"));
-		LOG.debug("cryptomator.pluginDir: {}", System.getProperty("cryptomator.pluginDir"));
-		LOG.debug("cryptomator.mountPointsDir: {}", System.getProperty("cryptomator.mountPointsDir"));
-		LOG.debug("cryptomator.minPwLength: {}", System.getProperty("cryptomator.minPwLength"));
-		LOG.debug("cryptomator.appVersion: {}", System.getProperty("cryptomator.appVersion"));
-		LOG.debug("cryptomator.buildNumber: {}", System.getProperty("cryptomator.buildNumber"));
-		LOG.debug("cryptomator.showTrayIcon: {}", System.getProperty("cryptomator.showTrayIcon"));
-		LOG.debug("fuse.experimental: {}", Boolean.getBoolean("fuse.experimental"));
+	private Environment() {}
+
+	public void log() {
+		LOG.info("user.home: {}", System.getProperty("user.home"));
+		LOG.info("java.library.path: {}", System.getProperty("java.library.path"));
+		LOG.info("user.language: {}", System.getProperty("user.language"));
+		LOG.info("user.region: {}", System.getProperty("user.region"));
+		LOG.info("logback.configurationFile: {}", System.getProperty("logback.configurationFile"));
+		logCryptomatorSystemProperty(SETTINGS_PATH_PROP_NAME);
+		logCryptomatorSystemProperty(IPC_SOCKET_PATH_PROP_NAME);
+		logCryptomatorSystemProperty(KEYCHAIN_PATHS_PROP_NAME);
+		logCryptomatorSystemProperty(WINDOWS_HELLO_KEYCHAIN_PATHS_PROP_NAME);
+		logCryptomatorSystemProperty(P12_PATH_PROP_NAME);
+		logCryptomatorSystemProperty(LOG_DIR_PROP_NAME);
+		logCryptomatorSystemProperty(LOOPBACK_ALIAS_PROP_NAME);
+		logCryptomatorSystemProperty(MOUNTPOINT_DIR_PROP_NAME);
+		logCryptomatorSystemProperty(MIN_PW_LENGTH_PROP_NAME);
+		logCryptomatorSystemProperty(APP_VERSION_PROP_NAME);
+		logCryptomatorSystemProperty(BUILD_NUMBER_PROP_NAME);
+		logCryptomatorSystemProperty(PLUGIN_DIR_PROP_NAME);
+		logCryptomatorSystemProperty(TRAY_ICON_PROP_NAME);
+		logCryptomatorSystemProperty(DISABLE_UPDATE_CHECK_PROP_NAME);
+		logCryptomatorSystemProperty(LICENSE_CHAIN_REQUIRED_CN_PROP_NAME);
+		logCryptomatorSystemProperty(HUB_ALLOWED_HOSTS_PROP_NAME);
+		logCryptomatorSystemProperty(HUB_TOFU_PROP_NAME);
+	}
+
+	public static Environment getInstance() {
+		final class Holder {
+
+			private static final Environment INSTANCE = new Environment();
+		}
+		return Holder.INSTANCE;
+	}
+
+	private void logCryptomatorSystemProperty(String propertyName) {
+		LOG.info("{}: {}", propertyName, System.getProperty(propertyName));
 	}
 
 	public boolean useCustomLogbackConfig() {
@@ -50,81 +87,109 @@ public class Environment {
 	}
 
 	public Stream<Path> getSettingsPath() {
-		return getPaths("cryptomator.settingsPath");
+		return getPaths(SETTINGS_PATH_PROP_NAME);
 	}
 
-	public Stream<Path> ipcSocketPath() {
-		return getPaths("cryptomator.ipcSocketPath");
+	public Stream<Path> getIpcSocketPath() {
+		return getPaths(IPC_SOCKET_PATH_PROP_NAME);
 	}
 
 	public Stream<Path> getKeychainPath() {
-		return getPaths("cryptomator.keychainPath");
+		return getPaths(KEYCHAIN_PATHS_PROP_NAME);
+	}
+
+	public Stream<Path> getWindowsHelloKeychainPath() {
+		return getPaths(WINDOWS_HELLO_KEYCHAIN_PATHS_PROP_NAME);
+	}
+
+	public Stream<Path> getP12Path() {
+		return getPaths(P12_PATH_PROP_NAME);
 	}
 
 	public Optional<Path> getLogDir() {
-		return getPath("cryptomator.logDir").map(this::replaceHomeDir);
+		return getPath(LOG_DIR_PROP_NAME);
 	}
 
-	public Optional<Path> getPluginDir() {
-		return getPath("cryptomator.pluginDir").map(this::replaceHomeDir);
+	public Optional<String> getLoopbackAlias() {
+		return Optional.ofNullable(System.getProperty(LOOPBACK_ALIAS_PROP_NAME));
 	}
 
 	public Optional<Path> getMountPointsDir() {
-		return getPath("cryptomator.mountPointsDir").map(this::replaceHomeDir);
-	}
-
-	public Optional<String> getAppVersion() {
-		return Optional.ofNullable(System.getProperty("cryptomator.appVersion"));
-	}
-
-	public Optional<String> getBuildNumber() {
-		return Optional.ofNullable(System.getProperty("cryptomator.buildNumber"));
+		return getPath(MOUNTPOINT_DIR_PROP_NAME);
 	}
 
 	public int getMinPwLength() {
-		return getInt("cryptomator.minPwLength", DEFAULT_MIN_PW_LENGTH);
+		return Integer.getInteger(MIN_PW_LENGTH_PROP_NAME, DEFAULT_MIN_PW_LENGTH);
+	}
+
+	/**
+	 * Returns the app version defined in the {@value APP_VERSION_PROP_NAME} property or returns "SNAPSHOT".
+	 *
+	 * @return App version or "SNAPSHOT", if undefined
+	 */
+	public String getAppVersion() {
+		return System.getProperty(APP_VERSION_PROP_NAME, "SNAPSHOT");
+	}
+
+	public Optional<String> getBuildNumber() {
+		return Optional.ofNullable(System.getProperty(BUILD_NUMBER_PROP_NAME));
+	}
+
+	/**
+	 * Returns the time this app version was published, as defined in the {@value PUBLISH_TIMESTAMP_PROP_NAME} property in ISO-8601 format (e.g. {@code 2026-11-10T20:33:00Z}).
+	 *
+	 * @return Publish timestamp or empty, if undefined
+	 */
+	public Optional<Instant> getPublishTimestamp() {
+		return Optional.ofNullable(System.getProperty(PUBLISH_TIMESTAMP_PROP_NAME)).map(Instant::parse);
+	}
+
+	/**
+	 * Returns the app version concatenated with the build number (if defined).
+	 *
+	 * @return version string formatted like {@code 1.2.3-4567} or {@code 1.2.3} if no build number is defined.
+	 */
+	public String getAppVersionWithBuildNumber() {
+		return getAppVersion() + getBuildNumber().map("-"::concat).orElse("");
+	}
+
+	public Optional<Path> getPluginDir() {
+		return getPath(PLUGIN_DIR_PROP_NAME);
 	}
 
 	public boolean showTrayIcon() {
-		return Boolean.getBoolean("cryptomator.showTrayIcon");
+		return Boolean.getBoolean(TRAY_ICON_PROP_NAME);
 	}
 
-	@Deprecated // TODO: remove as soon as custom mount path works properly on Win+Fuse
-	public boolean useExperimentalFuse() {
-		return Boolean.getBoolean("fuse.experimental");
+	public boolean disableUpdateCheck() {
+		return Boolean.getBoolean(DISABLE_UPDATE_CHECK_PROP_NAME);
 	}
 
-	private int getInt(String propertyName, int defaultValue) {
-		String value = System.getProperty(propertyName);
-		try {
-			return Integer.parseInt(value);
-		} catch (NumberFormatException e) { // includes "null" values
-			return defaultValue;
-		}
+	public String getLicenseChainRequiredCn() {
+		return System.getProperty(LICENSE_CHAIN_REQUIRED_CN_PROP_NAME, DEFAULT_LICENSE_CHAIN_REQUIRED_CN);
+	}
+
+	public Set<String> hubAllowedHosts() {
+		var allowedHubHostsString = System.getProperty(HUB_ALLOWED_HOSTS_PROP_NAME, "");
+		return Arrays.stream(allowedHubHostsString.split(","))
+				.map(String::trim)
+				.filter(Predicate.not(String::isEmpty))
+				.collect(Collectors.toUnmodifiableSet());
+	}
+
+	public boolean hubTrustOnFirstUse() {
+		return Boolean.getBoolean(HUB_TOFU_PROP_NAME);
 	}
 
 	private Optional<Path> getPath(String propertyName) {
 		String value = System.getProperty(propertyName);
-		return Optional.ofNullable(value).map(Paths::get);
+		return Optional.ofNullable(value).map(Path::of);
 	}
 
-	// visible for testing
-	public Path getHomeDir() {
-		return getPath("user.home").orElseThrow();
-	}
-
-	// visible for testing
-	public Stream<Path> getPaths(String propertyName) {
-		Stream<String> rawSettingsPaths = getRawList(propertyName, PATH_LIST_SEP);
-		return rawSettingsPaths.filter(Predicate.not(Strings::isNullOrEmpty)).map(Paths::get).map(this::replaceHomeDir);
-	}
-
-	private Path replaceHomeDir(Path path) {
-		if (path.startsWith(RELATIVE_HOME_DIR)) {
-			return getHomeDir().resolve(RELATIVE_HOME_DIR.relativize(path));
-		} else {
-			return path;
-		}
+	@VisibleForTesting
+	Stream<Path> getPaths(String propertyName) {
+		Stream<String> rawSettingsPaths = getRawList(propertyName, System.getProperty("path.separator").charAt(0));
+		return rawSettingsPaths.filter(Predicate.not(Strings::isNullOrEmpty)).map(Path::of);
 	}
 
 	private Stream<String> getRawList(String propertyName, char separator) {

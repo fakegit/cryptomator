@@ -1,60 +1,82 @@
-import org.cryptomator.integrations.autostart.AutoStartProvider;
-import org.cryptomator.integrations.keychain.KeychainAccessProvider;
-import org.cryptomator.integrations.tray.TrayIntegrationProvider;
+import ch.qos.logback.classic.spi.Configurator;
+import org.cryptomator.common.locationpresets.DropboxLinuxLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.DropboxMacLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.DropboxWindowsLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.GoogleDriveMacLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.GoogleDriveWindowsLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.ICloudMacLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.ICloudWindowsLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.LeitzcloudLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.LocationPresetsProvider;
+import org.cryptomator.common.locationpresets.MegaLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.OneDriveLinuxLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.OneDriveMacLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.OneDriveWindowsLocationPresetsProvider;
+import org.cryptomator.common.locationpresets.PCloudLocationPresetsProvider;
+import org.cryptomator.integrations.revealpath.RevealPathService;
+import org.cryptomator.integrations.tray.TrayMenuController;
 import org.cryptomator.integrations.uiappearance.UiAppearanceProvider;
+import org.cryptomator.logging.LogbackConfiguratorFactory;
+import org.cryptomator.networking.SSLContextProvider;
+import org.cryptomator.networking.SSLContextWithMacKeychain;
+import org.cryptomator.networking.SSLContextWithPKCS12TrustStore;
+import org.cryptomator.networking.SSLContextWithWindowsCertStore;
+import org.cryptomator.ui.fxapp.JfxRevealPathService;
+import org.cryptomator.ui.fxapp.JfxUiAppearanceProvider;
+import org.cryptomator.ui.traymenu.AwtTrayMenuController;
 
-module org.cryptomator.desktop {
+open module org.cryptomator.desktop {
+	requires static org.jetbrains.annotations;
+
+	requires org.cryptomator.cryptolib;
 	requires org.cryptomator.cryptofs;
-	requires org.cryptomator.frontend.dokany;
 	requires org.cryptomator.frontend.fuse;
 	requires org.cryptomator.frontend.webdav;
 	requires org.cryptomator.integrations.api;
+	// jdk:
 	requires java.desktop;
+	requires java.naming;
 	requires java.net.http;
 	requires javafx.base;
 	requires javafx.graphics;
 	requires javafx.controls;
 	requires javafx.fxml;
-	requires com.tobiasdiez.easybind;
+	// 3rd party:
+	requires ch.qos.logback.classic;
+	requires ch.qos.logback.core;
+	requires com.auth0.jwt;
 	requires com.google.common;
-	requires com.google.gson;
+	requires com.fasterxml.jackson.databind;
+	requires com.fasterxml.jackson.datatype.jsr310;
+	requires com.nimbusds.jose.jwt;
 	requires com.nulabinc.zxcvbn;
+	requires com.tobiasdiez.easybind;
+	requires dagger;
+	requires io.github.coffeelibs.tinyoauth2client;
 	requires org.slf4j;
 	requires org.apache.commons.lang3;
-	requires dagger;
-	requires com.auth0.jwt;
+	requires com.github.benmanes.caffeine;
 
-	/* TODO: filename-based modules: */
-	requires static javax.inject; /* ugly dagger/guava crap */
-	requires logback.classic;
-	requires logback.core;
+	/* dagger bs */
+	requires jakarta.inject;
+	requires static javax.inject;
+	requires java.compiler;
 
-	uses AutoStartProvider;
-	uses KeychainAccessProvider;
-	uses TrayIntegrationProvider;
-	uses UiAppearanceProvider;
+	uses org.cryptomator.common.locationpresets.LocationPresetsProvider;
+	uses SSLContextProvider;
+	uses org.cryptomator.event.NotificationHandler;
 
-	opens org.cryptomator.common.settings to com.google.gson;
-
-	opens org.cryptomator.common to javafx.fxml;
-	opens org.cryptomator.common.vaults to javafx.fxml;
-	opens org.cryptomator.ui.addvaultwizard to javafx.fxml;
-	opens org.cryptomator.ui.changepassword to javafx.fxml;
-	opens org.cryptomator.ui.common to javafx.fxml;
-	opens org.cryptomator.ui.controls to javafx.fxml;
-	opens org.cryptomator.ui.forgetPassword to javafx.fxml;
-	opens org.cryptomator.ui.fxapp to javafx.fxml;
-	opens org.cryptomator.ui.health to javafx.fxml;
-	opens org.cryptomator.ui.keyloading.masterkeyfile to javafx.fxml;
-	opens org.cryptomator.ui.lock to javafx.fxml;
-	opens org.cryptomator.ui.mainwindow to javafx.fxml;
-	opens org.cryptomator.ui.migration to javafx.fxml;
-	opens org.cryptomator.ui.preferences to javafx.fxml;
-	opens org.cryptomator.ui.quit to javafx.fxml;
-	opens org.cryptomator.ui.recoverykey to javafx.fxml;
-	opens org.cryptomator.ui.removevault to javafx.fxml;
-	opens org.cryptomator.ui.stats to javafx.fxml;
-	opens org.cryptomator.ui.unlock to javafx.fxml;
-	opens org.cryptomator.ui.vaultoptions to javafx.fxml;
-	opens org.cryptomator.ui.wrongfilealert to javafx.fxml;
+	provides UiAppearanceProvider with JfxUiAppearanceProvider;
+	provides RevealPathService with JfxRevealPathService;
+	provides TrayMenuController with AwtTrayMenuController;
+	provides Configurator with LogbackConfiguratorFactory;
+	provides SSLContextProvider with SSLContextWithWindowsCertStore, SSLContextWithMacKeychain, SSLContextWithPKCS12TrustStore;
+	provides LocationPresetsProvider with //
+			DropboxWindowsLocationPresetsProvider, DropboxMacLocationPresetsProvider, DropboxLinuxLocationPresetsProvider, //
+			GoogleDriveMacLocationPresetsProvider, GoogleDriveWindowsLocationPresetsProvider, //
+			ICloudWindowsLocationPresetsProvider, ICloudMacLocationPresetsProvider, //
+			LeitzcloudLocationPresetsProvider, //
+			MegaLocationPresetsProvider, //
+			OneDriveWindowsLocationPresetsProvider, OneDriveMacLocationPresetsProvider, OneDriveLinuxLocationPresetsProvider, //
+			PCloudLocationPresetsProvider;
 }

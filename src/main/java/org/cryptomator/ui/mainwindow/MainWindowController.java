@@ -1,35 +1,29 @@
 package org.cryptomator.ui.mainwindow;
 
 import org.apache.commons.lang3.SystemUtils;
+import org.cryptomator.common.LicenseHolder;
+import org.cryptomator.common.settings.Settings;
 import org.cryptomator.common.vaults.Vault;
 import org.cryptomator.common.vaults.VaultListManager;
-import org.cryptomator.cryptofs.CryptoFileSystemProvider;
-import org.cryptomator.cryptofs.DirStructure;
 import org.cryptomator.ui.common.FxController;
-import org.cryptomator.ui.wrongfilealert.WrongFileAlertComponent;
+import org.cryptomator.ui.fxapp.FxApplicationWindows;
+import org.cryptomator.updater.UpdateChecker;
+import org.cryptomator.ui.preferences.SelectedPreferencesTab;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javafx.beans.Observable;
-import javafx.beans.property.BooleanProperty;
+import javafx.beans.binding.BooleanBinding;
 import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.ReadOnlyObjectProperty;
-import javafx.beans.property.SimpleBooleanProperty;
 import javafx.fxml.FXML;
-import javafx.scene.input.DragEvent;
-import javafx.scene.input.TransferMode;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.layout.StackPane;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Path;
-import java.util.Set;
-import java.util.stream.Collectors;
-
-import static org.cryptomator.common.Constants.CRYPTOMATOR_FILENAME_EXT;
-import static org.cryptomator.common.Constants.MASTERKEY_FILENAME;
-import static org.cryptomator.common.Constants.VAULTCONFIG_FILENAME;
+import javafx.stage.WindowEvent;
 
 @MainWindowScoped
 public class MainWindowController implements FxController {
@@ -37,32 +31,101 @@ public class MainWindowController implements FxController {
 	private static final Logger LOG = LoggerFactory.getLogger(MainWindowController.class);
 
 	private final Stage window;
-	private final VaultListManager vaultListManager;
 	private final ReadOnlyObjectProperty<Vault> selectedVault;
-	private final WrongFileAlertComponent.Builder wrongFileAlert;
-	private final BooleanProperty draggingOver = new SimpleBooleanProperty();
-	private final BooleanProperty draggingVaultOver = new SimpleBooleanProperty();
-	public StackPane root;
+	private final Settings settings;
+	private final FxApplicationWindows appWindows;
+	private final BooleanBinding updateAvailable;
+	private final LicenseHolder licenseHolder;
+
+	@FXML
+	private StackPane root;
 
 	@Inject
-	public MainWindowController(@MainWindow Stage window, VaultListManager vaultListManager, ObjectProperty<Vault> selectedVault, WrongFileAlertComponent.Builder wrongFileAlert) {
+	public MainWindowController(@MainWindow Stage window, //
+								ObjectProperty<Vault> selectedVault, //
+								Settings settings, //
+								FxApplicationWindows appWindows, //
+								UpdateChecker updateChecker, //
+								LicenseHolder licenseHolder) {
 		this.window = window;
-		this.vaultListManager = vaultListManager;
 		this.selectedVault = selectedVault;
-		this.wrongFileAlert = wrongFileAlert;
+		this.settings = settings;
+		this.appWindows = appWindows;
+		this.updateAvailable = updateChecker.updateAvailableProperty();
+		this.licenseHolder = licenseHolder;
+		updateChecker.automaticallyCheckForUpdatesIfEnabled();
+
 	}
 
 	@FXML
 	public void initialize() {
 		LOG.trace("init MainWindowController");
-		root.setOnDragEntered(this::handleDragEvent);
-		root.setOnDragOver(this::handleDragEvent);
-		root.setOnDragDropped(this::handleDragEvent);
-		root.setOnDragExited(this::handleDragEvent);
+
 		if (SystemUtils.IS_OS_WINDOWS) {
 			root.getStyleClass().add("os-windows");
 		}
 		window.focusedProperty().addListener(this::mainWindowFocusChanged);
+
+		int x = settings.windowXPosition.get();
+		int y = settings.windowYPosition.get();
+		int width = settings.windowWidth.get();
+		int height = settings.windowHeight.get();
+		if (windowPositionSaved(x, y, width, height)) {
+			window.setX(x);
+			window.setY(y);
+			window.setWidth(Math.clamp(width, window.getMinWidth(), window.getMaxWidth()));
+			window.setHeight(Math.clamp(height, window.getMinHeight(), window.getMaxHeight()));
+		}
+
+		window.setOnShowing(this::checkDisplayBounds);
+
+		settings.windowXPosition.bind(window.xProperty());
+		settings.windowYPosition.bind(window.yProperty());
+		settings.windowWidth.bind(window.widthProperty());
+		settings.windowHeight.bind(window.heightProperty());
+	}
+
+	private boolean windowPositionSaved(int x, int y, int width, int height) {
+		return x != 0 || y != 0 || width != 0 || height != 0;
+	}
+
+	private void checkDisplayBounds(WindowEvent windowEvent) {
+		int x = settings.windowXPosition.get();
+		int y = settings.windowYPosition.get();
+		int width = settings.windowWidth.get();
+		int height = settings.windowHeight.get();
+
+		Rectangle2D primaryScreenBounds = Screen.getPrimary().getBounds();
+		if (!isWithinDisplayBounds(x, y, width, height)) { //use stored window position
+			LOG.debug("Resetting window position due to insufficient screen overlap");
+			var centeredX = (primaryScreenBounds.getWidth() - window.getMinWidth()) / 2;
+			var centeredY = (primaryScreenBounds.getHeight() - window.getMinHeight()) / 2;
+			//check if we can keep width and height
+			if (isWithinDisplayBounds((int) centeredX, (int) centeredY, width, height)) {
+				//if so, keep window size
+				window.setWidth(Math.clamp(width, window.getMinWidth(), window.getMaxWidth()));
+				window.setHeight(Math.clamp(height, window.getMinHeight(), window.getMaxHeight()));
+			}
+			//reset position of upper left corner
+			window.setX(centeredX);
+			window.setY(centeredY);
+		}
+	}
+
+	private boolean isWithinDisplayBounds(int x, int y, int width, int height) {
+		// define a rect which is inset on all sides from the window's rect:
+		final int shrinkedX = x + 20; // 20px left
+		final int shrinkedY = y + 5; // 5px top
+		final int shrinkedWidth = width - 40; // 20px left + 20px right
+		final int shrinkedHeigth = height - 25; // 5px top + 20px bottom
+		return isRectangleWithinBounds(shrinkedX, shrinkedY, 0, shrinkedHeigth) // Left pixel column
+				&& isRectangleWithinBounds(shrinkedX + shrinkedWidth, shrinkedY, 0, shrinkedHeigth) // Right pixel column
+				&& isRectangleWithinBounds(shrinkedX, shrinkedY, shrinkedWidth, 0) // Top pixel row
+				&& isRectangleWithinBounds(shrinkedX, shrinkedY + shrinkedHeigth, shrinkedWidth, 0); // Bottom pixel row
+	}
+
+	private boolean isRectangleWithinBounds(int x, int y, int width, int height) {
+		return !Screen.getScreensForRectangle(x, y, width, height).isEmpty();
 	}
 
 	private void mainWindowFocusChanged(Observable observable) {
@@ -72,65 +135,43 @@ public class MainWindowController implements FxController {
 		}
 	}
 
-	private void handleDragEvent(DragEvent event) {
-		if (DragEvent.DRAG_ENTERED.equals(event.getEventType()) && event.getGestureSource() == null) {
-			draggingOver.set(true);
-		} else if (DragEvent.DRAG_OVER.equals(event.getEventType()) && event.getGestureSource() == null && event.getDragboard().hasFiles()) {
-			event.acceptTransferModes(TransferMode.ANY);
-			draggingVaultOver.set(event.getDragboard().getFiles().stream().map(File::toPath).anyMatch(this::containsVault));
-		} else if (DragEvent.DRAG_DROPPED.equals(event.getEventType()) && event.getGestureSource() == null && event.getDragboard().hasFiles()) {
-			Set<Path> vaultPaths = event.getDragboard().getFiles().stream().map(File::toPath).filter(this::containsVault).collect(Collectors.toSet());
-			if (vaultPaths.isEmpty()) {
-				wrongFileAlert.build().showWrongFileAlertWindow();
-			} else {
-				vaultPaths.forEach(this::addVault);
-			}
-			event.setDropCompleted(!vaultPaths.isEmpty());
-			event.consume();
-		} else if (DragEvent.DRAG_EXITED.equals(event.getEventType())) {
-			draggingOver.set(false);
-			draggingVaultOver.set(false);
-		}
+	@FXML
+	public void showGeneralPreferences() {
+		appWindows.showPreferencesWindow(SelectedPreferencesTab.GENERAL);
 	}
 
-	private boolean containsVault(Path path) {
-		try {
-			if (path.getFileName().toString().endsWith(CRYPTOMATOR_FILENAME_EXT)) {
-				path = path.getParent();
-			}
-			return CryptoFileSystemProvider.checkDirStructureForVault(path, VAULTCONFIG_FILENAME, MASTERKEY_FILENAME) != DirStructure.UNRELATED;
-		} catch (IOException e) {
-			return false;
-		}
+	@FXML
+	public void showContributePreferences() {
+		appWindows.showPreferencesWindow(SelectedPreferencesTab.CONTRIBUTE);
 	}
 
-	private void addVault(Path pathToVault) {
-		try {
-			if (pathToVault.getFileName().toString().endsWith(CRYPTOMATOR_FILENAME_EXT)) {
-				vaultListManager.add(pathToVault.getParent());
-			} else {
-				vaultListManager.add(pathToVault);
-			}
-		} catch (IOException e) {
-			LOG.debug("Not a vault: {}", pathToVault);
-		}
+	@FXML
+	public void showUpdatePreferences() {
+		appWindows.showPreferencesWindow(SelectedPreferencesTab.UPDATES);
 	}
 
-	/* Getter/Setter */
-
-	public BooleanProperty draggingOverProperty() {
-		return draggingOver;
+	public ReadOnlyBooleanProperty debugModeEnabledProperty() {
+		return settings.debugMode;
 	}
 
-	public boolean isDraggingOver() {
-		return draggingOver.get();
+	public boolean getDebugModeEnabled() {
+		return debugModeEnabledProperty().get();
 	}
 
-	public BooleanProperty draggingVaultOverProperty() {
-		return draggingVaultOver;
+	public BooleanBinding updateAvailableProperty() {
+		return updateAvailable;
 	}
 
-	public boolean isDraggingVaultOver() {
-		return draggingVaultOver.get();
+	public boolean getUpdateAvailable() {
+		return updateAvailable.get();
 	}
+
+	public BooleanBinding licenseValidProperty() {
+		return licenseHolder.validLicenseProperty();
+	}
+
+	public boolean getLicenseValid() {
+		return licenseHolder.isValidLicense();
+	}
+
 }

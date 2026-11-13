@@ -7,17 +7,24 @@ public enum FontAwesome5Icon {
 	ANCHOR("\uF13D"), //
 	ARROW_UP("\uF062"), //
 	BAN("\uF05E"), //
+	BELL("\uF0F3"), //
 	BUG("\uF188"), //
 	CARET_DOWN("\uF0D7"), //
 	CARET_RIGHT("\uF0Da"), //
 	CHECK("\uF00C"), //
+	CHEVRON_LEFT("\uF053"), //
+	CHEVRON_RIGHT("\uF054"), //
 	CLOCK("\uF017"), //
 	CLIPBOARD("\uF328"), //
 	COG("\uF013"), //
 	COGS("\uF085"), //
+	COMPRESS_ALT("\uF422"), //
 	COPY("\uF0C5"), //
 	CROWN("\uF521"), //
+	DONATE("\uF4B9"), //
 	EDIT("\uF044"), //
+	ELLIPSIS_V("\uF142"), //
+	EXCHANGE_ALT("\uF362"), //
 	EXCLAMATION("\uF12A"), //
 	EXCLAMATION_CIRCLE("\uF06A"), //
 	EXCLAMATION_TRIANGLE("\uF071"), //
@@ -25,8 +32,10 @@ public enum FontAwesome5Icon {
 	EYE_SLASH("\uF070"), //
 	FAST_FORWARD("\uF050"), //
 	FILE("\uF15B"), //
+	FILE_DOWNLOAD("\uF56D"), //
 	FILE_IMPORT("\uF56F"), //
 	FOLDER_OPEN("\uF07C"), //
+	FUNNEL("\uF0B0"), //
 	HAND_HOLDING_HEART("\uF4BE"), //
 	HEART("\uF004"), //
 	HDD("\uF0A0"), //
@@ -37,17 +46,23 @@ public enum FontAwesome5Icon {
 	LOCK("\uF023"), //
 	LOCK_OPEN("\uF3C1"), //
 	MAGIC("\uF0D0"), //
+	PENCIL("\uF303"), //
 	PLUS("\uF067"), //
 	PRINT("\uF02F"), //
 	QUESTION("\uF128"), //
+	QUESTION_CIRCLE("\uf059"), //
 	REDO("\uF01E"), //
 	SEARCH("\uF002"), //
+	SHARE("\uF064"), //
 	SPINNER("\uF110"), //
+	SPONSORS("\uF2B5"), //
 	STETHOSCOPE("\uF0f1"), //
 	SYNC("\uF021"), //
 	TIMES("\uF00D"), //
 	TRASH("\uF1F8"), //
 	UNLINK("\uf127"), //
+	USER_COG("\uf4fe"), //
+	USER_LOCK("\uf502"), //
 	WRENCH("\uF0AD"), //
 	WINDOW_MINIMIZE("\uF2D1"), //
 	;

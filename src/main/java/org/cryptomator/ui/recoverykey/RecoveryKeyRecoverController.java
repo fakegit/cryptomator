@@ -1,116 +1,111 @@
 package org.cryptomator.ui.recoverykey;
 
-import com.google.common.base.CharMatcher;
-import com.google.common.base.Strings;
 import dagger.Lazy;
+import org.cryptomator.common.recovery.RecoveryActionType;
 import org.cryptomator.common.vaults.Vault;
+import org.cryptomator.common.vaults.VaultState;
 import org.cryptomator.ui.common.FxController;
 import org.cryptomator.ui.common.FxmlFile;
 import org.cryptomator.ui.common.FxmlScene;
 
 import javax.inject.Inject;
-import javafx.beans.binding.Bindings;
-import javafx.beans.binding.BooleanBinding;
-import javafx.beans.property.StringProperty;
+import javax.inject.Named;
+import javafx.beans.property.ObjectProperty;
 import javafx.fxml.FXML;
 import javafx.scene.Scene;
-import javafx.scene.control.TextArea;
-import javafx.scene.control.TextFormatter;
-import javafx.scene.input.KeyCode;
-import javafx.scene.input.KeyEvent;
+import javafx.scene.control.Button;
 import javafx.stage.Stage;
-import java.util.Optional;
+import java.util.ResourceBundle;
 
 @RecoveryKeyScoped
 public class RecoveryKeyRecoverController implements FxController {
 
-	private final static CharMatcher ALLOWED_CHARS = CharMatcher.inRange('a', 'z').or(CharMatcher.is(' '));
-
 	private final Stage window;
 	private final Vault vault;
-	private final StringProperty recoveryKey;
-	private final RecoveryKeyFactory recoveryKeyFactory;
-	private final BooleanBinding validRecoveryKey;
-	private final Lazy<Scene> resetPasswordScene;
-	private final AutoCompleter autoCompleter;
+	private final Lazy<Scene> nextScene;
+	private final Lazy<Scene> onBoardingScene;
+	private final ResourceBundle resourceBundle;
+	public ObjectProperty<RecoveryActionType> recoverType;
 
-	public TextArea textarea;
+	@FXML
+	private Button cancelButton;
+
+	@FXML
+	RecoveryKeyValidateController recoveryKeyValidateController;
 
 	@Inject
-	public RecoveryKeyRecoverController(@RecoveryKeyWindow Stage window, @RecoveryKeyWindow Vault vault, @RecoveryKeyWindow StringProperty recoveryKey, RecoveryKeyFactory recoveryKeyFactory, @FxmlScene(FxmlFile.RECOVERYKEY_RESET_PASSWORD) Lazy<Scene> resetPasswordScene) {
+	public RecoveryKeyRecoverController(@RecoveryKeyWindow Stage window, //
+										@RecoveryKeyWindow Vault vault, //
+										ResourceBundle resourceBundle, //
+										@FxmlScene(FxmlFile.RECOVERYKEY_RESET_PASSWORD) Lazy<Scene> resetPasswordScene, //
+										@FxmlScene(FxmlFile.RECOVERYKEY_EXPERT_SETTINGS) Lazy<Scene> expertSettingsScene, //
+										@FxmlScene(FxmlFile.RECOVERYKEY_ONBOARDING) Lazy<Scene> onBoardingScene, //
+										@Named("recoverType") ObjectProperty<RecoveryActionType> recoverType) {
 		this.window = window;
 		this.vault = vault;
-		this.recoveryKey = recoveryKey;
-		this.recoveryKeyFactory = recoveryKeyFactory;
-		this.validRecoveryKey = Bindings.createBooleanBinding(this::isValidRecoveryKey, recoveryKey);
-		this.resetPasswordScene = resetPasswordScene;
-		this.autoCompleter = new AutoCompleter(recoveryKeyFactory.getDictionary());
+		this.resourceBundle = resourceBundle;
+		this.onBoardingScene = onBoardingScene;
+		this.recoverType = recoverType;
+		this.nextScene = switch (recoverType.get()) {
+			case RESTORE_ALL, RESTORE_VAULT_CONFIG -> {
+				window.setTitle(resourceBundle.getString("recover.recoverVaultConfig.title"));
+				yield expertSettingsScene;
+			}
+			case RESTORE_MASTERKEY -> {
+				window.setTitle(resourceBundle.getString("recover.recoverMasterkey.title"));
+				yield resetPasswordScene;
+			}
+			case RESET_PASSWORD -> {
+				window.setTitle(resourceBundle.getString("recoveryKey.recover.title"));
+				yield resetPasswordScene;
+			}
+			case SHOW_KEY -> {
+				window.setTitle(resourceBundle.getString("recoveryKey.display.title"));
+				yield resetPasswordScene;
+			}
+			default -> throw new IllegalArgumentException("Unexpected recovery action type: " + recoverType.get());
+		};
 	}
 
 	@FXML
 	public void initialize() {
-		recoveryKey.bind(textarea.textProperty());
+		if (recoverType.get() == RecoveryActionType.RESET_PASSWORD) {
+			cancelButton.setText(resourceBundle.getString("generic.button.cancel"));
+		} else {
+			cancelButton.setText(resourceBundle.getString("generic.button.back"));
+		}
 	}
 
-	private TextFormatter.Change filterTextChange(TextFormatter.Change change) {
-		if (Strings.isNullOrEmpty(change.getText())) {
-			// pass-through caret/selection changes that don't affect the text
-			return change;
-		}
-		if (!ALLOWED_CHARS.matchesAllOf(change.getText())) {
-			return null; // reject change
-		}
-
-		String text = change.getControlNewText();
-		int caretPos = change.getCaretPosition();
-		if (caretPos == text.length() || text.charAt(caretPos) == ' ') { // are we at the end of a word?
-			int beginOfWord = Math.max(text.substring(0, caretPos).lastIndexOf(' ') + 1, 0);
-			String currentWord = text.substring(beginOfWord, caretPos);
-			Optional<String> suggestion = autoCompleter.autocomplete(currentWord);
-			if (suggestion.isPresent()) {
-				String completion = suggestion.get().substring(currentWord.length());
-				change.setText(change.getText() + completion);
-				change.setAnchor(caretPos + completion.length());
+	@FXML
+	public void closeOrReturn() {
+		switch (recoverType.get()) {
+			case RESET_PASSWORD -> window.close();
+			case RESTORE_MASTERKEY -> {
+				window.setScene(onBoardingScene.get());
+				window.centerOnScreen();
+			}
+			default -> {
+				if(vault.getState().equals(VaultState.Value.ALL_MISSING)){
+					recoverType.set(RecoveryActionType.RESTORE_ALL);
+				}
+				else {
+					recoverType.set(RecoveryActionType.RESTORE_VAULT_CONFIG);
+				}
+				window.setScene(onBoardingScene.get());
+				window.centerOnScreen();
 			}
 		}
-		return change;
-	}
-
-	@FXML
-	public void onKeyPressed(KeyEvent keyEvent) {
-		if (keyEvent.getCode() == KeyCode.TAB && textarea.getAnchor() > textarea.getCaretPosition()) {
-			// apply autocompletion:
-			int pos = textarea.getAnchor();
-			textarea.insertText(pos, " ");
-			textarea.positionCaret(pos + 1);
-		}
-	}
-
-	@FXML
-	public void close() {
-		window.close();
 	}
 
 	@FXML
 	public void recover() {
-		window.setScene(resetPasswordScene.get());
+		window.setScene(nextScene.get());
 	}
 
 	/* Getter/Setter */
 
-	public Vault getVault() {
-		return vault;
+	public RecoveryKeyValidateController getValidateController() {
+		return recoveryKeyValidateController;
 	}
 
-	public BooleanBinding validRecoveryKeyProperty() {
-		return validRecoveryKey;
-	}
-
-	public boolean isValidRecoveryKey() {
-		return recoveryKeyFactory.validateRecoveryKey(recoveryKey.get());
-	}
-
-	public TextFormatter getRecoveryKeyTextFormatter() {
-		return new TextFormatter<>(this::filterTextChange);
-	}
 }

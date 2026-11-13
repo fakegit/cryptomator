@@ -1,6 +1,11 @@
 package org.cryptomator.ui.vaultoptions;
 
+import org.cryptomator.common.vaults.Vault;
+import org.cryptomator.common.vaults.VaultState;
 import org.cryptomator.ui.common.FxController;
+import org.cryptomator.ui.keyloading.KeyLoadingStrategy;
+import org.cryptomator.ui.keyloading.hub.HubKeyLoadingStrategy;
+import org.cryptomator.ui.keyloading.masterkeyfile.MasterkeyFileLoadingStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,15 +23,18 @@ public class VaultOptionsController implements FxController {
 	private static final Logger LOG = LoggerFactory.getLogger(VaultOptionsController.class);
 
 	private final Stage window;
+	private final Vault vault;
 	private final ObjectProperty<SelectedVaultOptionsTab> selectedTabProperty;
 	public TabPane tabPane;
 	public Tab generalTab;
 	public Tab mountTab;
 	public Tab keyTab;
+	public Tab hubTab;
 
 	@Inject
-	VaultOptionsController(@VaultOptionsWindow Stage window, ObjectProperty<SelectedVaultOptionsTab> selectedTabProperty) {
+	VaultOptionsController(@VaultOptionsWindow Stage window, @VaultOptionsWindow Vault vault, ObjectProperty<SelectedVaultOptionsTab> selectedTabProperty) {
 		this.window = window;
+		this.vault = vault;
 		this.selectedTabProperty = selectedTabProperty;
 	}
 
@@ -35,6 +43,17 @@ public class VaultOptionsController implements FxController {
 		window.setOnShowing(this::windowWillAppear);
 		selectedTabProperty.addListener(observable -> this.selectChosenTab());
 		tabPane.getSelectionModel().selectedItemProperty().addListener(observable -> this.selectedTabChanged());
+		var vaultKeyLoader = vault.getVaultSettings().lastKnownKeyLoader.get();
+		if(!KeyLoadingStrategy.isMasterkeyFileVault(vaultKeyLoader)){
+			tabPane.getTabs().remove(keyTab);
+		}
+		if(!KeyLoadingStrategy.isHubVault(vaultKeyLoader)){
+			tabPane.getTabs().remove(hubTab);
+		}
+
+		vault.stateProperty().addListener(observable -> {
+			tabPane.setDisable(vault.getState().equals(VaultState.Value.UNLOCKED));
+		});
 	}
 
 	private void selectChosenTab() {
@@ -47,6 +66,7 @@ public class VaultOptionsController implements FxController {
 			case ANY, GENERAL -> generalTab;
 			case MOUNT -> mountTab;
 			case KEY -> keyTab;
+			case HUB -> hubTab;
 		};
 	}
 

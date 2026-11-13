@@ -1,16 +1,15 @@
 package org.cryptomator.ui.mainwindow;
 
-import com.tobiasdiez.easybind.EasyBind;
 import org.cryptomator.common.vaults.Vault;
 import org.cryptomator.common.vaults.VaultListManager;
-import org.cryptomator.ui.common.ErrorComponent;
 import org.cryptomator.ui.common.FxController;
-import org.cryptomator.ui.removevault.RemoveVaultComponent;
+import org.cryptomator.ui.dialogs.Dialogs;
+import org.cryptomator.ui.fxapp.FxApplicationWindows;
 
 import javax.inject.Inject;
 import javax.inject.Named;
-import javafx.beans.binding.Binding;
 import javafx.beans.property.ObjectProperty;
+import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.stage.Stage;
 
@@ -18,21 +17,30 @@ import javafx.stage.Stage;
 public class VaultDetailUnknownErrorController implements FxController {
 
 	private final ObjectProperty<Vault> vault;
-	private final ErrorComponent.Builder errorComponentBuilder;
+	private final FxApplicationWindows appWindows;
 	private final Stage errorWindow;
-	private final RemoveVaultComponent.Builder removeVault;
+	private final ObservableList<Vault> vaults;
+	private final Stage mainWindow;
+	private final Dialogs dialogs;
 
 	@Inject
-	public VaultDetailUnknownErrorController(ObjectProperty<Vault> vault, ErrorComponent.Builder errorComponentBuilder, @Named("errorWindow") Stage errorWindow, RemoveVaultComponent.Builder removeVault) {
+	public VaultDetailUnknownErrorController(@MainWindow Stage mainWindow, //
+											 ObjectProperty<Vault> vault, //
+											 ObservableList<Vault> vaults, //
+											 FxApplicationWindows appWindows, //
+											 @Named("errorWindow") Stage errorWindow, //
+											 Dialogs dialogs) {
+		this.mainWindow = mainWindow;
 		this.vault = vault;
-		this.errorComponentBuilder = errorComponentBuilder;
+		this.vaults = vaults;
+		this.appWindows = appWindows;
 		this.errorWindow = errorWindow;
-		this.removeVault = removeVault;
+		this.dialogs = dialogs;
 	}
 
 	@FXML
 	public void showError() {
-		errorComponentBuilder.window(errorWindow).cause(vault.get().getLastKnownException()).build().showErrorScene();
+		appWindows.showErrorWindow(vault.get().getLastKnownException(), errorWindow, null);
 	}
 
 	@FXML
@@ -42,6 +50,6 @@ public class VaultDetailUnknownErrorController implements FxController {
 
 	@FXML
 	void didClickRemoveVault() {
-		removeVault.vault(vault.get()).build().showRemoveVault();
+		dialogs.prepareRemoveVaultDialog(mainWindow, vault.get(), vaults).build().showAndWait();
 	}
 }

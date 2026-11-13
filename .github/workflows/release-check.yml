@@ -1,0 +1,61 @@
+name: Release Check
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  JAVA_DIST: 'temurin'
+  JAVA_VERSION: 27
+
+permissions:
+  contents: read
+
+jobs:
+  check-preconditions:
+    name: Validate commits pushed to release/hotfix branch to fulfill release requirements
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Java
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: ${{ env.JAVA_DIST }}
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'maven'
+      - id: validate-pom-version
+        name: Validate POM version
+        run: |
+          if [[ $GITHUB_REF =~ refs/heads/(hotfix|release)/[0-9]+\.[0-9]+\.[0-9]+.* ]]; then
+            SEM_VER_STR=${GITHUB_REF##*/}
+          else
+            echo "Failed to parse version"
+            exit 1
+          fi
+
+          if [[ ${SEM_VER_STR} == `./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout` ]]; then
+            echo "semVerStr=${SEM_VER_STR}" >> $GITHUB_OUTPUT
+          else
+            echo "Version not set in POM"
+            exit 1
+          fi
+      - name: Validate release in org.cryptomator.Cryptomator.metainfo.xml file
+        if: ${{ ! (contains(github.event.head_commit.message, '[skip metadata check]') || contains(github.event.head_commit.message, '[metadata check skip]')) }}
+        run: |
+          if ! grep -q "<release date=\".*\" version=\"${SEM_VER_STR}\">" dist/linux/common/org.cryptomator.Cryptomator.metainfo.xml; then
+            echo "Release not set in dist/linux/common/org.cryptomator.Cryptomator.metainfo.xml"
+            exit 1
+          fi
+        env:
+          SEM_VER_STR: ${{ steps.validate-pom-version.outputs.semVerStr }}
+
+  check-urls:
+    uses: ./.github/workflows/check-urls.yml

@@ -1,46 +1,51 @@
 package org.cryptomator.ui.vaultoptions;
 
 import org.cryptomator.common.keychain.KeychainManager;
+import org.cryptomator.common.recovery.RecoveryActionType;
 import org.cryptomator.common.vaults.Vault;
-import org.cryptomator.integrations.keychain.KeychainAccessException;
 import org.cryptomator.ui.changepassword.ChangePasswordComponent;
 import org.cryptomator.ui.common.FxController;
+import org.cryptomator.ui.forgetpassword.ForgetPasswordComponent;
 import org.cryptomator.ui.recoverykey.RecoveryKeyComponent;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
-import javafx.beans.binding.Bindings;
-import javafx.beans.binding.BooleanExpression;
+import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.beans.property.SimpleObjectProperty;
+import javafx.beans.value.ObservableValue;
 import javafx.fxml.FXML;
 import javafx.stage.Stage;
+import java.nio.file.Files;
+
+import static org.cryptomator.common.Constants.MASTERKEY_FILENAME;
 
 @VaultOptionsScoped
 public class MasterkeyOptionsController implements FxController {
 
-	private static final Logger LOG = LoggerFactory.getLogger(MasterkeyOptionsController.class);
-
 	private final Vault vault;
 	private final Stage window;
 	private final ChangePasswordComponent.Builder changePasswordWindow;
-	private final RecoveryKeyComponent.Builder recoveryKeyWindow;
+	private final RecoveryKeyComponent.Factory recoveryKeyWindow;
+	private final ForgetPasswordComponent.Builder forgetPasswordWindow;
 	private final KeychainManager keychain;
-	private final BooleanExpression passwordSaved;
+	private final ObservableValue<Boolean> passwordSaved;
+	private final BooleanProperty masterkeyFileAvailable;
 
 
 	@Inject
-	MasterkeyOptionsController(@VaultOptionsWindow Vault vault, @VaultOptionsWindow Stage window, ChangePasswordComponent.Builder changePasswordWindow, RecoveryKeyComponent.Builder recoveryKeyWindow, KeychainManager keychain) {
+	MasterkeyOptionsController(@VaultOptionsWindow Vault vault, @VaultOptionsWindow Stage window, ChangePasswordComponent.Builder changePasswordWindow, RecoveryKeyComponent.Factory recoveryKeyWindow, ForgetPasswordComponent.Builder forgetPasswordWindow, KeychainManager keychain) {
 		this.vault = vault;
 		this.window = window;
 		this.changePasswordWindow = changePasswordWindow;
 		this.recoveryKeyWindow = recoveryKeyWindow;
+		this.forgetPasswordWindow = forgetPasswordWindow;
 		this.keychain = keychain;
-		if (keychain.isSupported() && !keychain.isLocked()) {
-			this.passwordSaved = Bindings.createBooleanBinding(this::isPasswordSaved, keychain.getPassphraseStoredProperty(vault.getId()));
+		if (keychain.isSupported()) {
+			this.passwordSaved = keychain.getPassphraseStoredProperty(vault.getId()).orElse(false);
 		} else {
 			this.passwordSaved = new SimpleBooleanProperty(false);
 		}
+		this.masterkeyFileAvailable = new SimpleBooleanProperty(Files.exists(vault.getPath().resolve(MASTERKEY_FILENAME)));
 	}
 
 	@FXML
@@ -50,32 +55,33 @@ public class MasterkeyOptionsController implements FxController {
 
 	@FXML
 	public void showRecoveryKey() {
-		recoveryKeyWindow.vault(vault).owner(window).build().showRecoveryKeyCreationWindow();
+		recoveryKeyWindow.create(vault, window, new SimpleObjectProperty<>(RecoveryActionType.SHOW_KEY)).showRecoveryKeyCreationWindow();
 	}
 
 	@FXML
-	public void showRecoverVaultDialogue() {
-		recoveryKeyWindow.vault(vault).owner(window).build().showRecoveryKeyRecoverWindow();
+	public void showRecoverVaultDialog() {
+		recoveryKeyWindow.create(vault, window, new SimpleObjectProperty<>(RecoveryActionType.RESET_PASSWORD)).showRecoveryKeyRecoverWindow();
 	}
 
 	@FXML
-	public void removePasswordFromKeychain() {
+	public void showForgetPasswordDialog() {
 		assert keychain.isSupported();
-		try {
-			keychain.deletePassphrase(vault.getId());
-		} catch (KeychainAccessException e) {
-			LOG.error("Failed to delete passphrase from system keychain.", e);
-		}
-		window.close();
+		forgetPasswordWindow.vault(vault).owner(window).build().showForgetPassword();
 	}
 
-	public BooleanExpression passwordSavedProperty() {
+	public ObservableValue<Boolean> passwordSavedProperty() {
 		return passwordSaved;
 	}
 
 	public boolean isPasswordSaved() {
-		if (keychain.isSupported() && !keychain.isLocked() && vault != null) {
-			return keychain.getPassphraseStoredProperty(vault.getId()).get();
-		} else return false;
+		return passwordSaved.getValue();
+	}
+
+	public BooleanProperty masterkeyFileAvailableProperty() {
+		return masterkeyFileAvailable;
+	}
+
+	public boolean isMasterkeyFileAvailable() {
+		return masterkeyFileAvailable.get();
 	}
 }

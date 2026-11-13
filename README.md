@@ -1,9 +1,9 @@
 [![cryptomator](cryptomator.png)](https://cryptomator.org/)
 
-[![Build](https://github.com/cryptomator/cryptomator/workflows/Build/badge.svg)](https://github.com/cryptomator/cryptomator/actions?query=workflow%3ABuild)
+[![Build](https://github.com/cryptomator/cryptomator/workflows/Build/badge.svg)](https://github.com/cryptomator/cryptomator/actions/workflows/build.yml?query=branch%3Adevelop)
 [![Known Vulnerabilities](https://snyk.io/test/github/cryptomator/cryptomator/badge.svg)](https://snyk.io/test/github/cryptomator/cryptomator)
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/2a0adf3cec6a4143b91035d3924178f1)](https://www.codacy.com/gh/cryptomator/cryptomator/dashboard)
-[![Twitter](https://img.shields.io/badge/twitter-@Cryptomator-blue.svg?style=flat)](http://twitter.com/Cryptomator)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=cryptomator_cryptomator&metric=alert_status)](https://sonarcloud.io/dashboard?id=cryptomator_cryptomator)
+[![Mastodon](https://img.shields.io/mastodon/follow/176112?domain=mastodon.online&style=flat)](https://mastodon.online/@cryptomator)
 [![Crowdin](https://badges.crowdin.net/cryptomator/localized.svg)](https://translate.cryptomator.org/)
 [![Latest Release](https://img.shields.io/github/release/cryptomator/cryptomator.svg)](https://github.com/cryptomator/cryptomator/releases/latest)
 [![Community](https://img.shields.io/badge/help-Community-orange.svg)](https://community.cryptomator.org)
@@ -12,23 +12,30 @@
 
 Cryptomator is provided free of charge as an open-source project despite the high development effort and is therefore dependent on donations. If you are also interested in further development, we offer you the opportunity to support us:
 
-- [One-time or recurring donation via Cryptomator's website.](https://cryptomator.org/#donate)
+- [One-time or recurring donation via Cryptomator's website.](https://cryptomator.org/donate/)
 - [Become a sponsor via Cryptomator's sponsors website.](https://cryptomator.org/sponsors/)
 
 ### Gold Sponsors
 
+Become our Gold Sponsor and showcase your brand to a targeted audience! Please contact us if you are interested.
+
+### Silver Sponsors
+
 <table>
   <tbody>
     <tr>
-      <td><a href="https://www.gee-whiz.de/"><img src="https://cryptomator.org/img/sponsors/geewhiz.svg" alt="gee-whiz" height="80"></a></td>
-      <td><a href="https://proxy-hub.com/"><img src="https://cryptomator.org/img/sponsors/proxyhub.svg" alt="Proxy-Hub" height="80"></a></td>
+      <td><a href="https://www.gee-whiz.de/"><img src="https://cryptomator.org/img/sponsors/geewhiz.svg" alt="gee-whiz" height="56"></a></td>
+      <td><a href="https://www.route4me.com/"><img src="https://cryptomator.org/img/sponsors/route4me.svg" alt="Route4Me" height="56"></a></td>
+      <td><a href="https://www.apivoid.com/"><img src="https://cryptomator.org/img/sponsors/apivoid.svg" alt="ApiVoid" height="56"></a></td>
     </tr>
   </tbody>
 </table>
 
-### Silver Sponsors
+### Special Shoutout
 
-- [Jameson Lopp](https://www.lopp.net/)
+Continuous integration hosting for ARM64 builds is provided by [MacStadium](https://www.macstadium.com/company/opensource).
+
+<a href="https://www.macstadium.com/company/opensource"><img src="https://uploads-ssl.webflow.com/5ac3c046c82724970fc60918/5c019d917bba312af7553b49_MacStadium-developerlogo.png" alt="MacStadium" height="100"></a>
 
 ---
 
@@ -48,7 +55,7 @@ Download native binaries of Cryptomator on [cryptomator.org](https://cryptomator
 - File names get encrypted
 - Folder structure gets obfuscated
 - Use as many vaults in your Dropbox as you want, each having individual passwords
-- Three thousand commits for the security of your data!! :tada:
+- More than Five thousand commits for the security of your data!! :tada:
 
 ### Privacy
 
@@ -60,36 +67,41 @@ Download native binaries of Cryptomator on [cryptomator.org](https://cryptomator
 
 ### Consistency
 
-- HMAC over file contents to recognize changed ciphertext before decryption
+- Authenticated encryption is used for file content to recognize changed ciphertext before decryption
 - I/O operations are transactional and atomic, if the filesystems support it
 - Each file contains all information needed for decryption (except for the key of course), no common metadata means no [SPOF](http://en.wikipedia.org/wiki/Single_point_of_failure)
 
 ### Security Architecture
 
-For more information on the security details visit [cryptomator.org](https://docs.cryptomator.org/en/latest/security/architecture/).
+For more information on the security details visit [cryptomator.org](https://docs.cryptomator.org/security/architecture/).
 
 ## Building
 
 ### Dependencies
 
-* JDK 17 (e.g. temurin)
-* Maven 3
-* Optional: OS-dependent build tools for native packaging (see [Windows](https://github.com/cryptomator/cryptomator-win), [OS X](https://github.com/cryptomator/cryptomator-osx), [Linux](https://github.com/cryptomator/builder-containers))
+* JDK 27 (e.g. temurin, zulu)
 
 ### Run Maven
 
 ```
-mvn clean install
-# or mvn clean install -Pwindows
-# or mvn clean install -Pmac
-# or mvn clean install -Plinux
+./mvnw clean install
 ```
 
 This will build all the jars and bundle them together with their OS-specific dependencies under `target`. This can now be used to build native packages.
 
-### Start Cryptomator
+### Running the app
 
-If you unzip the buildkit for your OS, you will find a launcher script with some basic settings. You might want to adjust these to your needs. To start Cryptomator, simply execute the launcher script from a terminal, e.g. `launcher-linux.sh`, if you're on a Linux system.
+```
+./mvnw -Prun compile exec:exec
+```
+
+This starts the app with the defaults defined in `pom.xml`. The OS-specific parameters are picked automatically.
+
+Add the `dev` profile to use the `Cryptomator-Dev` settings, log and mount directories instead, so a development run does not interfere with an installed Cryptomator:
+
+```
+./mvnw -Prun,dev compile exec:exec
+```
 
 ## License
 

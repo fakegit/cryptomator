@@ -45,25 +45,30 @@ public class GeneralVaultOptionsController implements FxController {
 
 	@FXML
 	public void initialize() {
-		vaultName.textProperty().set(vault.getVaultSettings().displayName().get());
+		vaultName.textProperty().set(vault.getVaultSettings().displayName.get());
 		vaultName.focusedProperty().addListener(this::trimVaultNameOnFocusLoss);
-		vaultName.setTextFormatter(new TextFormatter<>(this::removeWhitespaces));
-		unlockOnStartupCheckbox.selectedProperty().bindBidirectional(vault.getVaultSettings().unlockAfterStartup());
+		vaultName.setTextFormatter(new TextFormatter<>(this::checkVaultNameLength));
+		unlockOnStartupCheckbox.selectedProperty().bindBidirectional(vault.getVaultSettings().unlockAfterStartup);
 		actionAfterUnlockChoiceBox.getItems().addAll(WhenUnlocked.values());
-		actionAfterUnlockChoiceBox.valueProperty().bindBidirectional(vault.getVaultSettings().actionAfterUnlock());
+		actionAfterUnlockChoiceBox.valueProperty().bindBidirectional(vault.getVaultSettings().actionAfterUnlock);
 		actionAfterUnlockChoiceBox.setConverter(new WhenUnlockedConverter(resourceBundle));
-		lockAfterTimeCheckbox.selectedProperty().bindBidirectional(vault.getVaultSettings().autoLockWhenIdle());
-		Bindings.bindBidirectional(lockTimeInMinutesTextField.textProperty(), vault.getVaultSettings().autoLockIdleSeconds(), new IdleTimeSecondsConverter());
+		lockAfterTimeCheckbox.selectedProperty().bindBidirectional(vault.getVaultSettings().autoLockWhenIdle);
+		Bindings.bindBidirectional(lockTimeInMinutesTextField.textProperty(), vault.getVaultSettings().autoLockIdleSeconds, new IdleTimeSecondsConverter());
 	}
 
 	private void trimVaultNameOnFocusLoss(Observable observable, Boolean wasFocussed, Boolean isFocussed) {
+		var displayNameSetting = vault.getVaultSettings().displayName;
 		if (!isFocussed) {
 			var trimmed = vaultName.getText().trim();
-			vault.getVaultSettings().displayName().set(trimmed);
+			if (!trimmed.isEmpty()) {
+				displayNameSetting.set(trimmed); //persist changes
+			} else {
+				vaultName.setText(displayNameSetting.get()); //revert changes
+			}
 		}
 	}
 
-	private TextFormatter.Change removeWhitespaces(TextFormatter.Change change) {
+	private TextFormatter.Change checkVaultNameLength(TextFormatter.Change change) {
 		if (change.isContentChange() && change.getControlNewText().length() > VAULTNAME_TRUNCATE_THRESHOLD) {
 			return null; // reject any change that would lead to a text exceeding threshold
 		} else {

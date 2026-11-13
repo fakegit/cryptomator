@@ -1,5 +1,7 @@
 package org.cryptomator.ui.controls;
 
+import org.cryptomator.common.Passphrase;
+
 import javafx.beans.Observable;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.StringProperty;
@@ -44,7 +46,7 @@ public class NiceSecurePasswordField extends StackPane {
 		nonPrintableCharsIcon.managedProperty().bind(passwordField.containingNonPrintableCharsProperty());
 
 		revealPasswordIcon.setGlyph(FontAwesome5Icon.EYE);
-		revealPasswordIcon.glyphProperty().bind(Bindings.createObjectBinding(this::getRevealPasswordGlyph, revealPasswordButton.selectedProperty()));
+		revealPasswordIcon.glyphProperty().bind(Bindings.when(revealPasswordButton.selectedProperty()).then(FontAwesome5Icon.EYE_SLASH).otherwise(FontAwesome5Icon.EYE));
 		revealPasswordIcon.setGlyphSize(ICON_SIZE);
 
 		revealPasswordButton.setContentDisplay(ContentDisplay.LEFT);
@@ -57,10 +59,6 @@ public class NiceSecurePasswordField extends StackPane {
 
 		getChildren().addAll(passwordField, iconContainer);
 		disabledProperty().addListener(this::disabledChanged);
-	}
-
-	private FontAwesome5Icon getRevealPasswordGlyph() {
-		return revealPasswordButton.isSelected() ? FontAwesome5Icon.EYE_SLASH : FontAwesome5Icon.EYE;
 	}
 
 	private void disabledChanged(@SuppressWarnings("unused") Observable observable) {
@@ -82,7 +80,7 @@ public class NiceSecurePasswordField extends StackPane {
 		return passwordField.textProperty();
 	}
 
-	public CharSequence getCharacters() {
+	public Passphrase getCharacters() {
 		return passwordField.getCharacters();
 	}
 

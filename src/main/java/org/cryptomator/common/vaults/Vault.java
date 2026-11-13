@@ -8,58 +8,66 @@
  *******************************************************************************/
 package org.cryptomator.common.vaults;
 
-import com.google.common.base.Strings;
 import org.apache.commons.lang3.SystemUtils;
-import org.cryptomator.common.mountpoint.InvalidMountPointException;
+import org.cryptomator.common.Constants;
+import org.cryptomator.common.FilesystemOwnerSupplier;
+import org.cryptomator.common.mount.Mounter;
+import org.cryptomator.common.settings.Settings;
 import org.cryptomator.common.settings.VaultSettings;
-import org.cryptomator.common.vaults.Volume.VolumeException;
 import org.cryptomator.cryptofs.CryptoFileSystem;
 import org.cryptomator.cryptofs.CryptoFileSystemProperties;
 import org.cryptomator.cryptofs.CryptoFileSystemProperties.FileSystemFlags;
 import org.cryptomator.cryptofs.CryptoFileSystemProvider;
 import org.cryptomator.cryptofs.common.FileSystemCapabilityChecker;
+import org.cryptomator.cryptofs.event.FilesystemEvent;
 import org.cryptomator.cryptolib.api.CryptoException;
 import org.cryptomator.cryptolib.api.MasterkeyLoader;
 import org.cryptomator.cryptolib.api.MasterkeyLoadingFailedException;
+import org.cryptomator.event.FileSystemEventAggregator;
+import org.cryptomator.event.NotificationManager;
+import org.cryptomator.integrations.mount.MountFailedException;
+import org.cryptomator.integrations.mount.Mountpoint;
+import org.cryptomator.integrations.mount.UnmountFailedException;
+import org.cryptomator.integrations.quickaccess.QuickAccessService;
+import org.cryptomator.integrations.quickaccess.QuickAccessServiceException;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Named;
-import javax.inject.Provider;
 import javafx.beans.Observable;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
+import javafx.beans.binding.ObjectBinding;
 import javafx.beans.binding.StringBinding;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyStringProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.ReadOnlyFileSystemException;
 import java.util.EnumSet;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 
 @PerVault
 public class Vault {
 
 	private static final Logger LOG = LoggerFactory.getLogger(Vault.class);
-	private static final Path HOME_DIR = Paths.get(SystemUtils.USER_HOME);
+	private static final Path HOME_DIR = Path.of(SystemUtils.USER_HOME);
 	private static final int UNLIMITED_FILENAME_LENGTH = Integer.MAX_VALUE;
 
 	private final VaultSettings vaultSettings;
-	private final Provider<Volume> volumeProvider;
-	private final StringBinding defaultMountFlags;
 	private final AtomicReference<CryptoFileSystem> cryptoFileSystem;
+	private final AtomicReference<QuickAccessService.QuickAccessEntry> quickAccessEntry;
 	private final VaultState state;
 	private final ObjectProperty<Exception> lastKnownException;
 	private final VaultConfigCache configCache;
 	private final VaultStats stats;
-	private final StringBinding displayName;
 	private final StringBinding displayablePath;
 	private final BooleanBinding locked;
 	private final BooleanBinding processing;
@@ -67,33 +75,50 @@ public class Vault {
 	private final BooleanBinding missing;
 	private final BooleanBinding needsMigration;
 	private final BooleanBinding unknownError;
-	private final StringBinding accessPoint;
-	private final BooleanBinding accessPointPresent;
+	private final BooleanBinding missingVaultConfig;
+	private final ObjectBinding<Mountpoint> mountPoint;
+	private final Mounter mounter;
+	private final Settings settings;
+	private final FileSystemEventAggregator fileSystemEventAggregator;
+	private final NotificationManager notificationManager;
+	private final ExecutorService executor;
 	private final BooleanProperty showingStats;
 
-	private volatile Volume volume;
+	private final AtomicReference<Mounter.MountHandle> mountHandle = new AtomicReference<>(null);
 
 	@Inject
-	Vault(VaultSettings vaultSettings, VaultConfigCache configCache, Provider<Volume> volumeProvider, @DefaultMountFlags StringBinding defaultMountFlags, AtomicReference<CryptoFileSystem> cryptoFileSystem, VaultState state, @Named("lastKnownException") ObjectProperty<Exception> lastKnownException, VaultStats stats) {
+	Vault(VaultSettings vaultSettings, //
+		  VaultConfigCache configCache, //
+		  AtomicReference<CryptoFileSystem> cryptoFileSystem, //
+		  VaultState state, //
+		  @Named("lastKnownException") ObjectProperty<Exception> lastKnownException, //
+		  VaultStats stats, //
+		  Mounter mounter, Settings settings, //
+		  FileSystemEventAggregator fileSystemEventAggregator, //
+		  NotificationManager notificationManager, //
+		  ExecutorService executor) {
 		this.vaultSettings = vaultSettings;
 		this.configCache = configCache;
-		this.volumeProvider = volumeProvider;
-		this.defaultMountFlags = defaultMountFlags;
 		this.cryptoFileSystem = cryptoFileSystem;
 		this.state = state;
 		this.lastKnownException = lastKnownException;
 		this.stats = stats;
-		this.displayName = Bindings.createStringBinding(this::getDisplayName, vaultSettings.displayName());
-		this.displayablePath = Bindings.createStringBinding(this::getDisplayablePath, vaultSettings.path());
+		this.displayablePath = Bindings.createStringBinding(this::getDisplayablePath, vaultSettings.path);
 		this.locked = Bindings.createBooleanBinding(this::isLocked, state);
 		this.processing = Bindings.createBooleanBinding(this::isProcessing, state);
 		this.unlocked = Bindings.createBooleanBinding(this::isUnlocked, state);
 		this.missing = Bindings.createBooleanBinding(this::isMissing, state);
+		this.missingVaultConfig = Bindings.createBooleanBinding(this::isMissingVaultConfig, state);
 		this.needsMigration = Bindings.createBooleanBinding(this::isNeedsMigration, state);
 		this.unknownError = Bindings.createBooleanBinding(this::isUnknownError, state);
-		this.accessPoint = Bindings.createStringBinding(this::getAccessPoint, state);
-		this.accessPointPresent = this.accessPoint.isNotEmpty();
+		this.mountPoint = Bindings.createObjectBinding(this::getMountPoint, state);
+		this.mounter = mounter;
+		this.settings = settings;
+		this.fileSystemEventAggregator = fileSystemEventAggregator;
+		this.notificationManager = notificationManager;
+		this.executor = executor;
 		this.showingStats = new SimpleBooleanProperty(false);
+		this.quickAccessEntry = new AtomicReference<>(null);
 	}
 
 	// ******************************************************************************
@@ -102,31 +127,43 @@ public class Vault {
 
 	private CryptoFileSystem createCryptoFileSystem(MasterkeyLoader keyLoader) throws IOException, MasterkeyLoadingFailedException {
 		Set<FileSystemFlags> flags = EnumSet.noneOf(FileSystemFlags.class);
-		if (vaultSettings.usesReadOnlyMode().get()) {
+		var createReadOnly = vaultSettings.usesReadOnlyMode.get();
+		try {
+			FileSystemCapabilityChecker.assertWriteAccess(getPath());
+		} catch (FileSystemCapabilityChecker.MissingCapabilityException e) {
+			if (!createReadOnly) {
+				throw new ReadOnlyFileSystemException();
+			}
+		}
+		if (createReadOnly) {
 			flags.add(FileSystemFlags.READONLY);
-		} else if (vaultSettings.maxCleartextFilenameLength().get() == -1) {
+		} else if (vaultSettings.maxCleartextFilenameLength.get() == -1) {
 			LOG.debug("Determining cleartext filename length limitations...");
-			var checker = new FileSystemCapabilityChecker();
 			int shorteningThreshold = configCache.get().allegedShorteningThreshold();
-			int ciphertextLimit = checker.determineSupportedCiphertextFileNameLength(getPath());
+			int ciphertextLimit = FileSystemCapabilityChecker.determineSupportedCiphertextFileNameLength(getPath());
 			if (ciphertextLimit < shorteningThreshold) {
-				int cleartextLimit = checker.determineSupportedCleartextFileNameLength(getPath());
-				vaultSettings.maxCleartextFilenameLength().set(cleartextLimit);
+				int cleartextLimit = FileSystemCapabilityChecker.determineSupportedCleartextFileNameLength(getPath());
+				vaultSettings.maxCleartextFilenameLength.set(cleartextLimit);
 			} else {
-				vaultSettings.maxCleartextFilenameLength().setValue(UNLIMITED_FILENAME_LENGTH);
+				vaultSettings.maxCleartextFilenameLength.setValue(UNLIMITED_FILENAME_LENGTH);
 			}
 		}
 
-		if (vaultSettings.maxCleartextFilenameLength().get() < UNLIMITED_FILENAME_LENGTH) {
-			LOG.warn("Limiting cleartext filename length on this device to {}.", vaultSettings.maxCleartextFilenameLength().get());
+		if (vaultSettings.maxCleartextFilenameLength.get() < UNLIMITED_FILENAME_LENGTH) {
+			LOG.warn("Limiting cleartext filename length on this device to {}.", vaultSettings.maxCleartextFilenameLength.get());
 		}
 
-		CryptoFileSystemProperties fsProps = CryptoFileSystemProperties.cryptoFileSystemProperties() //
+		var fsPropsBuilder = CryptoFileSystemProperties.cryptoFileSystemProperties() //
 				.withKeyLoader(keyLoader) //
 				.withFlags(flags) //
-				.withMaxCleartextNameLength(vaultSettings.maxCleartextFilenameLength().get()) //
-				.build();
-		return CryptoFileSystemProvider.newFileSystem(getPath(), fsProps);
+				.withMaxCleartextNameLength(vaultSettings.maxCleartextFilenameLength.get()) //
+				.withVaultConfigFilename(Constants.VAULTCONFIG_FILENAME) //
+				.withFilesystemEventConsumer(this::consumeVaultEvent);
+		if (keyLoader instanceof FilesystemOwnerSupplier oo) {
+			fsPropsBuilder.withOwnerGetter(oo::getOwner);
+		}
+
+		return CryptoFileSystemProvider.newFileSystem(getPath(), fsPropsBuilder.build());
 	}
 
 	private void destroyCryptoFileSystem() {
@@ -141,7 +178,7 @@ public class Vault {
 		}
 	}
 
-	public synchronized void unlock(MasterkeyLoader keyLoader) throws CryptoException, IOException, VolumeException, InvalidMountPointException {
+	public synchronized void unlock(MasterkeyLoader keyLoader) throws CryptoException, IOException, MountFailedException {
 		if (cryptoFileSystem.get() != null) {
 			throw new IllegalStateException("Already unlocked.");
 		}
@@ -149,9 +186,15 @@ public class Vault {
 		boolean success = false;
 		try {
 			cryptoFileSystem.set(fs);
-			volume = volumeProvider.get();
-			volume.mount(fs, getEffectiveMountFlags(), this::lockOnVolumeExit);
-			success = true;
+			var rootPath = fs.getRootDirectories().iterator().next();
+			var mountHandle = mounter.mount(vaultSettings, rootPath);
+			success = this.mountHandle.compareAndSet(null, mountHandle);
+			if (success && mountHandle.supportsWhenTerminated()) {
+				mountHandle.mountObj().whenTerminated().whenComplete((_, _) -> executor.execute(() -> lockAfterTermination(mountHandle)));
+			}
+			if (settings.useQuickAccess.getValue()) {
+				addToQuickAccess();
+			}
 		} finally {
 			if (!success) {
 				destroyCryptoFileSystem();
@@ -159,37 +202,129 @@ public class Vault {
 		}
 	}
 
-	private void lockOnVolumeExit(Throwable t) {
-		LOG.info("Unmounted vault '{}'", getDisplayName());
-		destroyCryptoFileSystem();
-		state.set(VaultState.Value.LOCKED);
-		if (t != null) {
-			LOG.warn("Unexpected unmount and lock of vault " + getDisplayName(), t);
+	public synchronized void lock(boolean forced) throws UnmountFailedException, IOException {
+		var mountHandle = this.mountHandle.get();
+		if (mountHandle == null) {
+			//another lock, or lockAfterTermination after an external unmount, may already have released the mount
+			return;
 		}
-	}
 
-	public synchronized void lock(boolean forced) throws VolumeException, LockNotCompletedException {
-		//initiate unmount
-		if (forced && volume.supportsForcedUnmount()) {
-			volume.unmountForced();
+		if (forced && mountHandle.supportsUnmountForced()) {
+			mountHandle.mountObj().unmountForced();
 		} else {
-			volume.unmount();
+			mountHandle.mountObj().unmount();
 		}
 
-		//wait for lockOnVolumeExit to be executed
 		try {
-			boolean locked = state.awaitState(VaultState.Value.LOCKED, 3000, TimeUnit.MILLISECONDS);
-			if (!locked) {
-				throw new LockNotCompletedException("Locking of vault " + this.getDisplayName() + " still in progress.");
-			}
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new LockNotCompletedException(e);
+			release(mountHandle);
+		} catch (UnmountFailedException e) {
+			//release() dropped the mount anyway, so report an IOException rather than an UnmountFailedException, which would offer a forced retry
+			throw new IOException("Closing the unmounted volume failed.", e);
+		}
+		LOG.info("Locked vault '{}'", getDisplayName());
+	}
+
+	private synchronized void lockAfterTermination(Mounter.MountHandle mountHandle) {
+		if (this.mountHandle.get() != mountHandle) {
+			return;
+		}
+
+		try {
+			release(mountHandle);
+		} catch (UnmountFailedException | IOException e) {
+			LOG.error("Releasing the mount of vault '{}' failed.", getDisplayName(), e);
+		}
+
+		if (markLockedIfUnmounted()) {
+			LOG.info("Locked vault '{}' after its volume was unmounted externally", getDisplayName());
+		} else {
+			LOG.debug("Released the externally unmounted volume of vault '{}', leaving its state to the current workflow", getDisplayName());
 		}
 	}
 
-	public void reveal(Volume.Revealer vaultRevealer) throws VolumeException {
-		volume.reveal(vaultRevealer);
+	/**
+	 * Ends the {@link VaultState.Value#PROCESSING PROCESSING} state that a lock or unlock workflow admitted, as {@link VaultState.Value#UNLOCKED UNLOCKED} if a mount remains and as {@link VaultState.Value#LOCKED LOCKED} otherwise.
+	 * <p>
+	 * Only the workflow that admitted {@code PROCESSING} may call this, after its last vault mutation.
+	 * Call it on the worker thread, never on the FX application thread, since it waits for running mount operations.
+	 */
+	public synchronized void finishProcessing() {
+		var target = mountHandle.get() != null ? VaultState.Value.UNLOCKED : VaultState.Value.LOCKED;
+		if (!state.transition(VaultState.Value.PROCESSING, target)) {
+			LOG.warn("Vault '{}' is not processing, leaving its state {}", getDisplayName(), state.getValue());
+		}
+	}
+
+	/**
+	 * Marks an {@link VaultState.Value#UNLOCKED UNLOCKED} vault as {@link VaultState.Value#LOCKED LOCKED} if no mount remains, for callers that do not own a {@link VaultState.Value#PROCESSING PROCESSING} state.
+	 *
+	 * @return {@code true} if the vault has been marked as locked
+	 */
+	public synchronized boolean markLockedIfUnmounted() {
+		return mountHandle.get() == null && state.transition(VaultState.Value.UNLOCKED, VaultState.Value.LOCKED);
+	}
+
+	private void release(Mounter.MountHandle mountHandle) throws UnmountFailedException, IOException {
+		try {
+			mountHandle.mountObj().close();
+		} finally {
+			removeFromQuickAccess();
+			destroyCryptoFileSystem();
+			this.mountHandle.set(null);
+			mountHandle.specialCleanup().run();
+		}
+	}
+
+	private synchronized void addToQuickAccess() {
+		if (quickAccessEntry.get() != null) {
+			//we don't throw an exception since we don't wanna block unlocking
+			LOG.warn("Vault already added to quick access area. Will be removed on next lock operation.");
+			return;
+		}
+
+		QuickAccessService.get() //
+				.filter(s -> s.getClass().getName().equals(settings.quickAccessService.getValue())) //
+				.findFirst() //
+				.ifPresentOrElse( //
+						this::addToQuickAccessInternal, //
+						() -> LOG.warn("Unable to add Vault to quick access area: Desired implementation not available.") //
+				);
+	}
+
+	private void addToQuickAccessInternal(@NotNull QuickAccessService s) {
+		if (getMountPoint() instanceof Mountpoint.WithPath mp) {
+			try {
+				var entry = s.add(mp.path(), getDisplayName());
+				quickAccessEntry.set(entry);
+			} catch (QuickAccessServiceException e) {
+				LOG.error("Adding vault to quick access area failed", e);
+			}
+		} else {
+			LOG.warn("Unable to add vault to quick access area: Vault is not mounted to local system path.");
+		}
+	}
+
+	private synchronized void removeFromQuickAccess() {
+		if (quickAccessEntry.get() == null) {
+			LOG.debug("Removing vault from quick access area: Entry not found, nothing to do.");
+			return;
+		}
+		removeFromQuickAccessInternal();
+	}
+
+	private void removeFromQuickAccessInternal() {
+		try {
+			quickAccessEntry.get().remove();
+			quickAccessEntry.set(null);
+		} catch (QuickAccessServiceException e) {
+			LOG.error("Removing vault from quick access area failed", e);
+		}
+	}
+
+
+	private void consumeVaultEvent(FilesystemEvent e) {
+		fileSystemEventAggregator.put(this, e);
+		notificationManager.offer(this, e);
 	}
 
 	// ******************************************************************************
@@ -264,33 +399,29 @@ public class Vault {
 		return state.get() == VaultState.Value.ERROR;
 	}
 
-	public StringBinding displayNameProperty() {
-		return displayName;
+	public BooleanBinding missingVaultConfigProperty() {
+		return missingVaultConfig;
+	}
+
+	public boolean isMissingVaultConfig() {
+		return state.get() == VaultState.Value.VAULT_CONFIG_MISSING || state.get() == VaultState.Value.ALL_MISSING;
+	}
+
+	public ReadOnlyStringProperty displayNameProperty() {
+		return vaultSettings.displayName;
 	}
 
 	public String getDisplayName() {
-		return vaultSettings.displayName().get();
+		return vaultSettings.displayName.get();
 	}
 
-	public StringBinding accessPointProperty() {
-		return accessPoint;
+	public ObjectBinding<Mountpoint> mountPointProperty() {
+		return mountPoint;
 	}
 
-	public String getAccessPoint() {
-		if (state.getValue() == VaultState.Value.UNLOCKED) {
-			assert volume != null;
-			return volume.getMountPoint().orElse(Path.of("")).toString();
-		} else {
-			return "";
-		}
-	}
-
-	public BooleanBinding accessPointPresentProperty() {
-		return accessPointPresent;
-	}
-
-	public boolean isAccessPointPresent() {
-		return accessPointPresent.get();
+	public Mountpoint getMountPoint() {
+		var handle = mountHandle.get();
+		return handle == null ? null : handle.mountObj().getMountpoint();
 	}
 
 	public StringBinding displayablePathProperty() {
@@ -298,7 +429,7 @@ public class Vault {
 	}
 
 	public String getDisplayablePath() {
-		Path p = vaultSettings.path().get();
+		Path p = vaultSettings.path.get();
 		if (p.startsWith(HOME_DIR)) {
 			Path relativePath = HOME_DIR.relativize(p);
 			String homePrefix = SystemUtils.IS_OS_WINDOWS ? "~\\" : "~/";
@@ -313,7 +444,7 @@ public class Vault {
 	}
 
 	public boolean isShowingStats() {
-		return accessPointPresent.get();
+		return mountHandle.get() != null;
 	}
 
 
@@ -335,44 +466,53 @@ public class Vault {
 	}
 
 	public Path getPath() {
-		return vaultSettings.path().getValue();
+		return vaultSettings.path.get();
 	}
 
-	public boolean isHavingCustomMountFlags() {
-		return !Strings.isNullOrEmpty(vaultSettings.mountFlags().get());
-	}
-
-	public StringBinding defaultMountFlagsProperty() {
-		return defaultMountFlags;
-	}
-
-	public String getDefaultMountFlags() {
-		return defaultMountFlags.get();
-	}
-
-	public String getEffectiveMountFlags() {
-		String mountFlags = vaultSettings.mountFlags().get();
-		if (Strings.isNullOrEmpty(mountFlags)) {
-			return getDefaultMountFlags();
-		} else {
-			return mountFlags;
+	/**
+	 * Gets from the cleartext path its ciphertext counterpart.
+	 *
+	 * @return Local os path to the ciphertext resource
+	 * @throws IOException if an I/O error occurs
+	 * @throws IllegalStateException if the vault is not unlocked
+	 */
+	public Path getCiphertextPath(Path cleartextPath) throws IOException {
+		if (!state.getValue().equals(VaultState.Value.UNLOCKED)) {
+			throw new IllegalStateException("Vault is not unlocked");
 		}
+		var fs = cryptoFileSystem.get();
+		var osPathSeparator = cleartextPath.getFileSystem().getSeparator();
+		var cryptoFsPathSeparator = fs.getSeparator();
+
+		if (getMountPoint() instanceof Mountpoint.WithPath mp) {
+			var absoluteCryptoFsPath = cryptoFsPathSeparator + mp.path().relativize(cleartextPath).toString();
+			if (!cryptoFsPathSeparator.equals(osPathSeparator)) {
+				absoluteCryptoFsPath = absoluteCryptoFsPath.replace(osPathSeparator, cryptoFsPathSeparator);
+			}
+			var cryptoPath = fs.getPath(absoluteCryptoFsPath);
+			return fs.getCiphertextPath(cryptoPath);
+		} else {
+			throw new UnsupportedOperationException("URI mount points not supported.");
+		}
+	}
+
+	/**
+	 * Gets the cleartext name from a given path to an encrypted vault file
+	 */
+	public String getCleartextName(Path ciphertextPath) throws IOException {
+		if (!state.getValue().equals(VaultState.Value.UNLOCKED)) {
+			throw new IllegalStateException("Vault is not unlocked");
+		}
+		var fs = cryptoFileSystem.get();
+		return fs.getCleartextName(ciphertextPath);
 	}
 
 	public VaultConfigCache getVaultConfigCache() {
 		return configCache;
 	}
 
-	public void setCustomMountFlags(String mountFlags) {
-		vaultSettings.mountFlags().set(mountFlags);
-	}
-
 	public String getId() {
-		return vaultSettings.getId();
-	}
-
-	public Optional<Volume> getVolume() {
-		return Optional.ofNullable(this.volume);
+		return vaultSettings.id;
 	}
 
 	// ******************************************************************************
@@ -394,6 +534,8 @@ public class Vault {
 	}
 
 	public boolean supportsForcedUnmount() {
-		return volume.supportsForcedUnmount();
+		var mh = mountHandle.get();
+		return mh != null && mh.supportsUnmountForced();
 	}
+
 }

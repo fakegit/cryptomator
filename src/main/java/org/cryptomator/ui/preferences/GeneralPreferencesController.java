@@ -1,35 +1,43 @@
 package org.cryptomator.ui.preferences;
 
+import org.apache.commons.lang3.SystemUtils;
 import org.cryptomator.common.Environment;
-import org.cryptomator.common.LicenseHolder;
+import org.cryptomator.common.keychain.KeychainManager;
+import org.cryptomator.common.keychain.KeychainModule;
+import org.cryptomator.common.settings.DeviceKey;
 import org.cryptomator.common.settings.Settings;
-import org.cryptomator.common.settings.UiTheme;
 import org.cryptomator.integrations.autostart.AutoStartProvider;
 import org.cryptomator.integrations.autostart.ToggleAutoStartFailedException;
+import org.cryptomator.integrations.common.NamedServiceProvider;
+import org.cryptomator.integrations.keychain.KeychainAccessException;
 import org.cryptomator.integrations.keychain.KeychainAccessProvider;
-import org.cryptomator.ui.common.ErrorComponent;
+import org.cryptomator.integrations.quickaccess.QuickAccessService;
+import org.cryptomator.integrations.revealpath.RevealFailedException;
+import org.cryptomator.integrations.revealpath.RevealPathService;
 import org.cryptomator.ui.common.FxController;
-import org.cryptomator.ui.traymenu.TrayMenuComponent;
+import org.cryptomator.ui.fxapp.FxApplicationWindows;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
-import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.beans.Observable;
 import javafx.beans.binding.Bindings;
-import javafx.beans.property.ObjectProperty;
-import javafx.beans.value.ObservableValue;
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.fxml.FXML;
-import javafx.geometry.NodeOrientation;
+import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ChoiceBox;
-import javafx.scene.control.RadioButton;
-import javafx.scene.control.Toggle;
 import javafx.scene.control.ToggleGroup;
 import javafx.stage.Stage;
 import javafx.util.StringConverter;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Optional;
-import java.util.ResourceBundle;
-import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
 
 @PreferencesScoped
 public class GeneralPreferencesController implements FxController {
@@ -38,95 +46,116 @@ public class GeneralPreferencesController implements FxController {
 
 	private final Stage window;
 	private final Settings settings;
-	private final boolean trayMenuInitialized;
-	private final boolean trayMenuSupported;
 	private final Optional<AutoStartProvider> autoStartProvider;
-	private final ObjectProperty<SelectedPreferencesTab> selectedTabProperty;
-	private final LicenseHolder licenseHolder;
-	private final ResourceBundle resourceBundle;
-	private final Application application;
+	private final List<QuickAccessService> quickAccessServices;
+	private final RevealPathService revealPathService;
 	private final Environment environment;
-	private final Set<KeychainAccessProvider> keychainAccessProviders;
-	private final ErrorComponent.Builder errorComponent;
-	public ChoiceBox<UiTheme> themeChoiceBox;
+	private final List<KeychainAccessProvider> keychainAccessProviders;
+	private final KeychainManager keychain;
+	private final ExecutorService backgroundExecutor;
+	private final FxApplicationWindows appWindows;
+	public CheckBox useKeychainCheckbox;
 	public ChoiceBox<KeychainAccessProvider> keychainBackendChoiceBox;
-	public CheckBox showMinimizeButtonCheckbox;
-	public CheckBox showTrayIconCheckbox;
+	public CheckBox useQuickAccessCheckbox;
+	public ChoiceBox<QuickAccessService> quickAccessServiceChoiceBox;
 	public CheckBox startHiddenCheckbox;
+	public CheckBox autoCloseVaultsCheckbox;
 	public CheckBox debugModeCheckbox;
 	public CheckBox autoStartCheckbox;
+	public Button resetTrustedHostsButton;
 	public ToggleGroup nodeOrientation;
-	public RadioButton nodeOrientationLtr;
-	public RadioButton nodeOrientationRtl;
 
+	private final BooleanProperty keychainMigrationRunning = new SimpleBooleanProperty();
 
 	@Inject
-	GeneralPreferencesController(@PreferencesWindow Stage window, Settings settings, TrayMenuComponent trayMenu, Optional<AutoStartProvider> autoStartProvider, Set<KeychainAccessProvider> keychainAccessProviders, ObjectProperty<SelectedPreferencesTab> selectedTabProperty, LicenseHolder licenseHolder, ResourceBundle resourceBundle, Application application, Environment environment, ErrorComponent.Builder errorComponent) {
+	GeneralPreferencesController(@PreferencesWindow Stage window, //
+								 Settings settings, //
+								 Optional<AutoStartProvider> autoStartProvider, //
+								 List<KeychainAccessProvider> keychainAccessProviders, //
+								 KeychainManager keychain, //
+								 RevealPathService revealPathService, //
+								 Environment environment, //
+								 FxApplicationWindows appWindows, //
+								 ExecutorService backgroundExecutor) {
 		this.window = window;
 		this.settings = settings;
-		this.trayMenuInitialized = trayMenu.isInitialized();
-		this.trayMenuSupported = trayMenu.isSupported();
 		this.autoStartProvider = autoStartProvider;
 		this.keychainAccessProviders = keychainAccessProviders;
-		this.selectedTabProperty = selectedTabProperty;
-		this.licenseHolder = licenseHolder;
-		this.resourceBundle = resourceBundle;
-		this.application = application;
+		this.keychain = keychain;
+		this.backgroundExecutor = backgroundExecutor;
+		this.quickAccessServices = QuickAccessService.get().toList();
+		this.revealPathService = revealPathService;
 		this.environment = environment;
-		this.errorComponent = errorComponent;
+		this.appWindows = appWindows;
 	}
 
 	@FXML
 	public void initialize() {
-		themeChoiceBox.getItems().addAll(UiTheme.applicableValues());
-		if (!themeChoiceBox.getItems().contains(settings.theme().get())) {
-			settings.theme().set(UiTheme.LIGHT);
-		}
-		themeChoiceBox.valueProperty().bindBidirectional(settings.theme());
-		themeChoiceBox.setConverter(new UiThemeConverter(resourceBundle));
-
-		showMinimizeButtonCheckbox.selectedProperty().bindBidirectional(settings.showMinimizeButton());
-
-		showTrayIconCheckbox.selectedProperty().bindBidirectional(settings.showTrayIcon());
-
-		startHiddenCheckbox.selectedProperty().bindBidirectional(settings.startHidden());
-
-		debugModeCheckbox.selectedProperty().bindBidirectional(settings.debugMode());
-
+		startHiddenCheckbox.selectedProperty().bindBidirectional(settings.startHidden);
+		autoCloseVaultsCheckbox.selectedProperty().bindBidirectional(settings.autoCloseVaults);
+		debugModeCheckbox.selectedProperty().bindBidirectional(settings.debugMode);
 		autoStartProvider.ifPresent(autoStart -> autoStartCheckbox.setSelected(autoStart.isEnabled()));
 
-		nodeOrientationLtr.setSelected(settings.userInterfaceOrientation().get() == NodeOrientation.LEFT_TO_RIGHT);
-		nodeOrientationRtl.setSelected(settings.userInterfaceOrientation().get() == NodeOrientation.RIGHT_TO_LEFT);
-		nodeOrientation.selectedToggleProperty().addListener(this::toggleNodeOrientation);
-
-		var keychainSettingsConverter = new KeychainProviderClassNameConverter(keychainAccessProviders);
 		keychainBackendChoiceBox.getItems().addAll(keychainAccessProviders);
-		keychainBackendChoiceBox.setValue(keychainSettingsConverter.fromString(settings.keychainProvider().get()));
-		keychainBackendChoiceBox.setConverter(new KeychainProviderDisplayNameConverter());
-		Bindings.bindBidirectional(settings.keychainProvider(), keychainBackendChoiceBox.valueProperty(), keychainSettingsConverter);
+		keychainBackendChoiceBox.setValue(KeychainModule.selectProvider(settings.keychainProvider.get(), keychainAccessProviders));
+		keychainBackendChoiceBox.setConverter(new NamedServiceConverter<>());
+		useKeychainCheckbox.selectedProperty().bindBidirectional(settings.useKeychain);
+		keychainBackendChoiceBox.disableProperty().bind(useKeychainCheckbox.selectedProperty().not().or(keychainMigrationRunning));
+		keychainBackendChoiceBox.valueProperty().addListener(this::changeKeychainProvider);
+
+		useQuickAccessCheckbox.selectedProperty().bindBidirectional(settings.useQuickAccess);
+		var quickAccessSettingsConverter = new ServiceToSettingsConverter<>(quickAccessServices);
+		quickAccessServiceChoiceBox.getItems().addAll(quickAccessServices);
+		quickAccessServiceChoiceBox.setValue(quickAccessSettingsConverter.fromString(settings.quickAccessService.get()));
+		quickAccessServiceChoiceBox.setConverter(new NamedServiceConverter<>());
+		quickAccessServiceChoiceBox.valueProperty().addListener((_, _, newService) -> settings.quickAccessService.set(quickAccessSettingsConverter.toString(newService)));
+		quickAccessServiceChoiceBox.disableProperty().bind(useQuickAccessCheckbox.selectedProperty().not());
+		if (resetTrustedHostsButton != null) {
+			resetTrustedHostsButton.disableProperty().bind(Bindings.isEmpty(settings.trustedHosts));
+		}
 	}
 
-
-	public boolean isTrayMenuInitialized() {
-		return trayMenuInitialized;
-	}
-
-	public boolean isTrayMenuSupported() {
-		return trayMenuSupported;
+	private void changeKeychainProvider(Observable observable, KeychainAccessProvider oldProvider, KeychainAccessProvider newProvider) {
+		if (keychainMigrationRunning.get()) {
+			return; // ignore the revert after a failed migration
+		}
+		//currently, we migrate on macOS (touchID vs regular keychain)
+		//and on Linux (GNOME Keyring / KDE Wallet / Secret Service)
+		if (SystemUtils.IS_OS_MAC || SystemUtils.IS_OS_LINUX) {
+			var idsAndNames = new HashMap<String, String>();
+			settings.directories.forEach(vs -> idsAndNames.put(vs.id, vs.displayName.getValue()));
+			idsAndNames.put(DeviceKey.KEYCHAIN_KEY, DeviceKey.KEYCHAIN_DISPLAY_NAME);
+			if (LOG.isDebugEnabled()) {
+				LOG.debug("Migrating keychain entries {} from {} to {}", idsAndNames.keySet(), oldProvider.getName(), newProvider.getName());
+			}
+			keychainMigrationRunning.set(true);
+			CompletableFuture.runAsync(() -> {
+				try {
+					KeychainManager.migrate(oldProvider, newProvider, idsAndNames);
+				} catch (KeychainAccessException e) {
+					throw new CompletionException(e);
+				}
+			}, backgroundExecutor).whenCompleteAsync((_, exception) -> {
+				if (exception == null) {
+					settings.keychainProvider.set(newProvider.getClass().getName());
+				} else {
+					LOG.error("Failed to migrate keychain entries from {} to {}", oldProvider.getName(), newProvider.getName(), exception);
+					keychainBackendChoiceBox.setValue(oldProvider);
+					appWindows.showErrorWindow(exception, window, window.getScene());
+				}
+				keychainMigrationRunning.set(false);
+			}, Platform::runLater);
+		} else {
+			settings.keychainProvider.set(newProvider.getClass().getName());
+		}
 	}
 
 	public boolean isAutoStartSupported() {
 		return autoStartProvider.isPresent();
 	}
 
-	private void toggleNodeOrientation(@SuppressWarnings("unused") ObservableValue<? extends Toggle> observable, @SuppressWarnings("unused") Toggle oldValue, Toggle newValue) {
-		if (nodeOrientationLtr.equals(newValue)) {
-			settings.userInterfaceOrientation().set(NodeOrientation.LEFT_TO_RIGHT);
-		} else if (nodeOrientationRtl.equals(newValue)) {
-			settings.userInterfaceOrientation().set(NodeOrientation.RIGHT_TO_LEFT);
-		} else {
-			LOG.warn("Unexpected toggle option {}", newValue);
-		}
+	public boolean isHubTrustOnFirstUseEnabled() {
+		return environment.hubTrustOnFirstUse();
 	}
 
 	@FXML
@@ -142,90 +171,73 @@ public class GeneralPreferencesController implements FxController {
 			} catch (ToggleAutoStartFailedException e) {
 				autoStartCheckbox.setSelected(!enableAutoStart); // restore previous state
 				LOG.error("Failed to toggle autostart.", e);
-				errorComponent.cause(e).window(window).returnToScene(window.getScene()).build().showErrorScene();
+				appWindows.showErrorWindow(e, window, window.getScene());
 			}
 		});
 	}
 
-	public LicenseHolder getLicenseHolder() {
-		return licenseHolder;
+	public boolean isSomeQuickAccessServiceAvailable() {
+		return !quickAccessServices.isEmpty();
 	}
 
-
 	@FXML
-	public void showContributeTab() {
-		selectedTabProperty.set(SelectedPreferencesTab.CONTRIBUTE);
+	public void resetTrustedHosts() {
+		settings.trustedHosts.clear();
 	}
 
 	@FXML
 	public void showLogfileDirectory() {
-		environment.getLogDir().ifPresent(logDirPath -> application.getHostServices().showDocument(logDirPath.toUri().toString()));
+		try {
+			revealPathService.reveal(environment.getLogDir().orElseThrow());
+		} catch (RevealFailedException e) {
+			LOG.warn("Failed to reveal log files directory.", e);
+		}
 	}
 
 	/* Helper classes */
+	private static class NamedServiceConverter<T extends NamedServiceProvider> extends StringConverter<T> {
 
-	private static class UiThemeConverter extends StringConverter<UiTheme> {
-
-		private final ResourceBundle resourceBundle;
-
-		UiThemeConverter(ResourceBundle resourceBundle) {
-			this.resourceBundle = resourceBundle;
+		@Override
+		public String toString(T namedService) {
+			if (namedService == null) {
+				return null;
+			} else {
+				return namedService.getName();
+			}
 		}
 
 		@Override
-		public String toString(UiTheme impl) {
-			return resourceBundle.getString(impl.getDisplayName());
-		}
-
-		@Override
-		public UiTheme fromString(String string) {
+		public T fromString(String string) {
 			throw new UnsupportedOperationException();
 		}
 
 	}
 
-	private class KeychainProviderDisplayNameConverter extends StringConverter<KeychainAccessProvider> {
+	private static class ServiceToSettingsConverter<T> extends StringConverter<T> {
+
+		private final List<T> services;
+
+		public ServiceToSettingsConverter(List<T> services) {
+			this.services = services;
+		}
 
 		@Override
-		public String toString(KeychainAccessProvider provider) {
-			if (provider == null) {
+		public String toString(T service) {
+			if (service == null) {
 				return null;
 			} else {
-				return provider.displayName();
+				return service.getClass().getName();
 			}
 		}
 
 		@Override
-		public KeychainAccessProvider fromString(String string) {
-			throw new UnsupportedOperationException();
-		}
-
-	}
-
-	private static class KeychainProviderClassNameConverter extends StringConverter<KeychainAccessProvider> {
-
-		private final Set<KeychainAccessProvider> keychainAccessProviders;
-
-		public KeychainProviderClassNameConverter(Set<KeychainAccessProvider> keychainAccessProviders) {
-			this.keychainAccessProviders = keychainAccessProviders;
-		}
-
-		@Override
-		public String toString(KeychainAccessProvider provider) {
-			if (provider == null) {
-				return null;
-			} else {
-				return provider.getClass().getName();
-			}
-		}
-
-		@Override
-		public KeychainAccessProvider fromString(String string) {
+		public T fromString(String string) {
 			if (string == null) {
 				return null;
 			} else {
-				return keychainAccessProviders.stream().filter(provider -> provider.getClass().getName().equals(string)).findAny().orElse(null);
+				return services.stream().filter(provider -> provider.getClass().getName().equals(string)).findAny().orElse(null);
 			}
 		}
 	}
+
 }

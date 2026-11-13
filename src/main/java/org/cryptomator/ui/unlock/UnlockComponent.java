@@ -7,38 +7,21 @@ package org.cryptomator.ui.unlock;
 
 import dagger.BindsInstance;
 import dagger.Subcomponent;
+import org.cryptomator.common.Nullable;
 import org.cryptomator.common.vaults.Vault;
 
 import javax.inject.Named;
 import javafx.stage.Stage;
-import java.util.Optional;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
 
 @UnlockScoped
 @Subcomponent(modules = {UnlockModule.class})
 public interface UnlockComponent {
 
-	ExecutorService defaultExecutorService();
-
 	UnlockWorkflow unlockWorkflow();
 
-	default Future<Boolean> startUnlockWorkflow() {
-		UnlockWorkflow workflow = unlockWorkflow();
-		defaultExecutorService().submit(workflow);
-		return workflow;
-	}
-
-	@Subcomponent.Builder
-	interface Builder {
-
-		@BindsInstance
-		Builder vault(@UnlockWindow Vault vault);
-
-		@BindsInstance
-		Builder owner(@Named("unlockWindowOwner") Optional<Stage> owner);
-
-		UnlockComponent build();
+	@Subcomponent.Factory
+	interface Factory {
+		UnlockComponent create(@BindsInstance @UnlockWindow Vault vault, @BindsInstance @Named("unlockWindowOwner") @Nullable Stage owner);
 	}
 
 }

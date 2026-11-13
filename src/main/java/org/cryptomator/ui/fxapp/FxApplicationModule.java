@@ -5,56 +5,46 @@
  *******************************************************************************/
 package org.cryptomator.ui.fxapp;
 
-import dagger.Binds;
 import dagger.Module;
 import dagger.Provides;
-import org.apache.commons.lang3.SystemUtils;
-import org.cryptomator.ui.common.ErrorComponent;
-import org.cryptomator.ui.common.StageFactory;
+import org.cryptomator.integrations.uiappearance.UiAppearanceProvider;
+import org.cryptomator.ui.decryptname.DecryptNameComponent;
+import org.cryptomator.ui.error.ErrorComponent;
+import org.cryptomator.ui.eventview.EventViewComponent;
+import org.cryptomator.ui.health.HealthCheckComponent;
 import org.cryptomator.ui.lock.LockComponent;
 import org.cryptomator.ui.mainwindow.MainWindowComponent;
+import org.cryptomator.ui.notification.NotificationComponent;
 import org.cryptomator.ui.preferences.PreferencesComponent;
 import org.cryptomator.ui.quit.QuitComponent;
+import org.cryptomator.ui.recoverykey.RecoveryKeyComponent;
+import org.cryptomator.ui.sharevault.ShareVaultComponent;
+import org.cryptomator.ui.traymenu.TrayMenuComponent;
 import org.cryptomator.ui.unlock.UnlockComponent;
+import org.cryptomator.ui.updatereminder.UpdateReminderComponent;
+import org.cryptomator.ui.vaultoptions.VaultOptionsComponent;
 
-import javax.inject.Named;
-import javafx.application.Application;
-import javafx.collections.ObservableSet;
 import javafx.scene.image.Image;
-import javafx.stage.Stage;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.util.Collections;
-import java.util.List;
+import java.util.Optional;
 
-@Module(includes = {UpdateCheckerModule.class}, subcomponents = {MainWindowComponent.class, PreferencesComponent.class, UnlockComponent.class, LockComponent.class, QuitComponent.class, ErrorComponent.class})
+@Module(subcomponents = {TrayMenuComponent.class, //
+		DecryptNameComponent.class, //
+		MainWindowComponent.class, //
+		PreferencesComponent.class, //
+		VaultOptionsComponent.class, //
+		UnlockComponent.class, //
+		LockComponent.class, //
+		QuitComponent.class, //
+		ErrorComponent.class, //
+		HealthCheckComponent.class, //
+		UpdateReminderComponent.class, //
+		ShareVaultComponent.class, //
+		EventViewComponent.class, //
+		RecoveryKeyComponent.class, //
+		NotificationComponent.class})
 abstract class FxApplicationModule {
-
-	@Provides
-	@Named("windowIcons")
-	@FxApplicationScoped
-	static List<Image> provideWindowIcons() {
-		if (SystemUtils.IS_OS_MAC) {
-			return Collections.emptyList();
-		}
-		try {
-			return List.of( //
-					createImageFromResource("/img/window_icon_32.png"), //
-					createImageFromResource("/img/window_icon_512.png") //
-			);
-		} catch (IOException e) {
-			throw new UncheckedIOException("Failed to load embedded resource.", e);
-		}
-	}
-
-	@Provides
-	@FxApplicationScoped
-	static StageFactory provideStageFactory(@Named("windowIcons") List<Image> windowIcons) {
-		return new StageFactory(stage -> {
-			stage.getIcons().addAll(windowIcons);
-		});
-	}
 
 	private static Image createImageFromResource(String resourceName) throws IOException {
 		try (InputStream in = FxApplicationModule.class.getResourceAsStream(resourceName)) {
@@ -62,21 +52,29 @@ abstract class FxApplicationModule {
 		}
 	}
 
-	@Binds
-	abstract Application bindApplication(FxApplication application);
-
 	@Provides
-	static MainWindowComponent provideMainWindowComponent(MainWindowComponent.Builder builder) {
-		return builder.build();
+	@FxApplicationScoped
+	static Optional<UiAppearanceProvider> provideAppearanceProvider() {
+		return UiAppearanceProvider.get();
 	}
 
 	@Provides
-	static PreferencesComponent providePreferencesComponent(PreferencesComponent.Builder builder) {
+	@FxApplicationScoped
+	static TrayMenuComponent provideTrayMenuComponent(TrayMenuComponent.Builder builder) {
 		return builder.build();
 	}
 
+
 	@Provides
+	@FxApplicationScoped
 	static QuitComponent provideQuitComponent(QuitComponent.Builder builder) {
 		return builder.build();
 	}
+
+	@Provides
+	@FxApplicationScoped
+	static EventViewComponent provideEventViewComponent(EventViewComponent.Factory factory) {
+		return factory.create();
+	}
+
 }

@@ -4,6 +4,7 @@ import dagger.Binds;
 import dagger.Module;
 import dagger.Provides;
 import dagger.multibindings.IntoMap;
+import org.cryptomator.common.mount.IllegalMountPointException;
 import org.cryptomator.common.vaults.Vault;
 import org.cryptomator.ui.common.DefaultSceneFactory;
 import org.cryptomator.ui.common.FxController;
@@ -14,17 +15,20 @@ import org.cryptomator.ui.common.FxmlScene;
 import org.cryptomator.ui.common.StageFactory;
 import org.cryptomator.ui.keyloading.KeyLoadingComponent;
 import org.cryptomator.ui.keyloading.KeyLoadingStrategy;
+import org.cryptomator.ui.recoverykey.RecoveryKeyComponent;
+import org.jetbrains.annotations.Nullable;
 
 import javax.inject.Named;
 import javax.inject.Provider;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.scene.Scene;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import java.util.Map;
-import java.util.Optional;
 import java.util.ResourceBundle;
 
-@Module(subcomponents = {KeyLoadingComponent.class})
+@Module(subcomponents = {KeyLoadingComponent.class, RecoveryKeyComponent.class})
 abstract class UnlockModule {
 
 	@Provides
@@ -37,12 +41,12 @@ abstract class UnlockModule {
 	@Provides
 	@UnlockWindow
 	@UnlockScoped
-	static Stage provideStage(StageFactory factory, @UnlockWindow Vault vault, @Named("unlockWindowOwner") Optional<Stage> owner) {
+	static Stage provideStage(StageFactory factory, @UnlockWindow Vault vault, @Nullable @Named("unlockWindowOwner") Stage owner) {
 		Stage stage = factory.create();
 		stage.setTitle(vault.getDisplayName());
 		stage.setResizable(false);
-		if (owner.isPresent()) {
-			stage.initOwner(owner.get());
+		if (owner != null) {
+			stage.initOwner(owner);
 			stage.initModality(Modality.WINDOW_MODAL);
 		} else {
 			stage.initModality(Modality.APPLICATION_MODAL);
@@ -53,8 +57,15 @@ abstract class UnlockModule {
 	@Provides
 	@UnlockWindow
 	@UnlockScoped
-	static KeyLoadingStrategy provideKeyLoadingStrategy(KeyLoadingComponent.Builder compBuilder, @UnlockWindow Vault vault, @UnlockWindow Stage window) {
-		return compBuilder.vault(vault).window(window).build().keyloadingStrategy();
+	static KeyLoadingStrategy provideKeyLoadingStrategy(KeyLoadingComponent.Factory compFactory, @UnlockWindow Vault vault, @UnlockWindow Stage window) {
+		return compFactory.create(vault, window).keyloadingStrategy();
+	}
+
+	@Provides
+	@UnlockWindow
+	@UnlockScoped
+	static ObjectProperty<IllegalMountPointException> illegalMountPointException() {
+		return new SimpleObjectProperty<>();
 	}
 
 	@Provides
@@ -71,6 +82,13 @@ abstract class UnlockModule {
 		return fxmlLoaders.createScene(FxmlFile.UNLOCK_INVALID_MOUNT_POINT);
 	}
 
+	@Provides
+	@FxmlScene(FxmlFile.UNLOCK_REQUIRES_RESTART)
+	@UnlockScoped
+	static Scene provideRestartRequiredScene(@UnlockWindow FxmlLoaderFactory fxmlLoaders) {
+		return fxmlLoaders.createScene(FxmlFile.UNLOCK_REQUIRES_RESTART);
+	}
+
 	// ------------------
 
 	@Binds
@@ -82,5 +100,10 @@ abstract class UnlockModule {
 	@IntoMap
 	@FxControllerKey(UnlockInvalidMountPointController.class)
 	abstract FxController bindUnlockInvalidMountPointController(UnlockInvalidMountPointController controller);
+
+	@Binds
+	@IntoMap
+	@FxControllerKey(UnlockRequiresRestartController.class)
+	abstract FxController bindUnlockRequiresRestartController(UnlockRequiresRestartController controller);
 
 }

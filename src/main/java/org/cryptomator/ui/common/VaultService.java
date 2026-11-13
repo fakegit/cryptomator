@@ -1,18 +1,21 @@
 package org.cryptomator.ui.common;
 
-import org.cryptomator.common.vaults.LockNotCompletedException;
 import org.cryptomator.common.vaults.Vault;
 import org.cryptomator.common.vaults.VaultState;
-import org.cryptomator.common.vaults.Volume;
+import org.cryptomator.integrations.mount.Mountpoint;
+import org.cryptomator.integrations.mount.UnmountFailedException;
+import org.cryptomator.integrations.revealpath.RevealFailedException;
+import org.cryptomator.integrations.revealpath.RevealPathService;
 import org.cryptomator.ui.fxapp.FxApplicationScoped;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javafx.concurrent.Task;
+import javafx.stage.Stage;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -23,13 +26,13 @@ public class VaultService {
 
 	private static final Logger LOG = LoggerFactory.getLogger(VaultService.class);
 
+	private final RevealPathService revealPathService;
 	private final ExecutorService executorService;
-	private final HostServiceRevealer vaultRevealer;
 
 	@Inject
-	public VaultService(ExecutorService executorService, HostServiceRevealer vaultRevealer) {
+	public VaultService(RevealPathService revealPathService, ExecutorService executorService) {
+		this.revealPathService = revealPathService;
 		this.executorService = executorService;
-		this.vaultRevealer = vaultRevealer;
 	}
 
 	public void reveal(Vault vault) {
@@ -42,9 +45,9 @@ public class VaultService {
 	 * @param vault The vault to reveal
 	 */
 	public Task<Vault> createRevealTask(Vault vault) {
-		Task<Vault> task = new RevealVaultTask(vault, vaultRevealer);
-		task.setOnSucceeded(evt -> LOG.info("Revealed {}", vault.getDisplayName()));
-		task.setOnFailed(evt -> LOG.error("Failed to reveal " + vault.getDisplayName(), evt.getSource().getException()));
+		Task<Vault> task = new RevealVaultTask(vault, revealPathService);
+		task.setOnSucceeded(_ -> LOG.info("Revealed {}", vault.getDisplayName()));
+		task.setOnFailed(evt -> LOG.warn("Failed to reveal {}", vault.getDisplayName(), evt.getSource().getException()));
 		return task;
 	}
 
@@ -53,7 +56,9 @@ public class VaultService {
 	 *
 	 * @param vault The vault to lock
 	 * @param forced Whether to attempt a forced lock
+	 * @deprecated use {@link org.cryptomator.ui.fxapp.FxApplicationWindows#startLockWorkflow(Vault, Stage)}
 	 */
+	@Deprecated
 	public void lock(Vault vault, boolean forced) {
 		executorService.execute(createLockTask(vault, forced));
 	}
@@ -83,14 +88,15 @@ public class VaultService {
 	}
 
 	/**
-	 * Creates but doesn't start a lock-all task.
+	 * Creates a lock-all task.
+	 * This task itself is _not started_, but its subtasks locking each vault will be already executed.
 	 *
 	 * @param vaults The list of vaults to be locked
 	 * @param forced Whether to attempt a forced lock
-	 * @return Meta-Task that waits until all vaults are locked or fails after the first failure of a subtask
+	 * @return Meta-Task that waits for all subtasks, which skip vaults that are not unlocked, and fails afterwards if any subtask failed
 	 */
 	public Task<Collection<Vault>> createLockAllTask(Collection<Vault> vaults, boolean forced) {
-		List<Task<Vault>> lockTasks = vaults.stream().map(v -> new LockVaultTask(v, forced)).collect(Collectors.toUnmodifiableList());
+		List<Task<Vault>> lockTasks = vaults.stream().<Task<Vault>>map(v -> new LockVaultTask(v, forced)).toList();
 		lockTasks.forEach(executorService::execute);
 		Task<Collection<Vault>> task = new WaitForTasksTask(lockTasks);
 		String vaultNames = vaults.stream().map(Vault::getDisplayName).collect(Collectors.joining(", "));
@@ -102,28 +108,26 @@ public class VaultService {
 	private static class RevealVaultTask extends Task<Vault> {
 
 		private final Vault vault;
-		private final Volume.Revealer revealer;
+		private final RevealPathService rs;
 
-		/**
-		 * @param vault The vault to lock
-		 * @param revealer The object to use to show the vault content to the user.
-		 */
-		public RevealVaultTask(Vault vault, Volume.Revealer revealer) {
+		public RevealVaultTask(Vault vault, RevealPathService revealPathService) {
 			this.vault = vault;
-			this.revealer = revealer;
-
-			setOnFailed(evt -> LOG.error("Failed to reveal " + vault.getDisplayName(), getException()));
+			this.rs = revealPathService;
 		}
 
 		@Override
-		protected Vault call() throws Volume.VolumeException {
-			vault.reveal(revealer);
+		protected Vault call() throws RevealFailedException {
+			switch (vault.getMountPoint()) {
+				case null -> LOG.warn("Not currently mounted");
+				case Mountpoint.WithPath m -> rs.reveal(m.path());
+				case Mountpoint.WithUri m -> LOG.info("Vault mounted at {}", m.uri()); // TODO show in UI?
+			}
 			return vault;
 		}
 	}
 
 	/**
-	 * A task that waits for completion of multiple other tasks
+	 * A task that waits for completion of multiple other tasks and fails once all are done, if any failed
 	 */
 	private static class WaitForTasksTask extends Task<Collection<Vault>> {
 
@@ -137,20 +141,19 @@ public class VaultService {
 
 		@Override
 		protected Collection<Vault> call() throws ExecutionException, InterruptedException {
-			Iterator<Task<Vault>> remainingTasks = startedTasks.iterator();
 			Collection<Vault> completed = new ArrayList<>();
-			try {
-				// wait for all tasks:
-				while (remainingTasks.hasNext()) {
-					Vault done = remainingTasks.next().get();
-					completed.add(done);
+			ExecutionException firstFailure = null;
+			for (Task<Vault> task : startedTasks) {
+				try {
+					completed.add(task.get());
+				} catch (ExecutionException e) {
+					if (firstFailure == null) {
+						firstFailure = e;
+					}
 				}
-			} catch (ExecutionException e) {
-				// cancel all remaining:
-				while (remainingTasks.hasNext()) {
-					remainingTasks.next().cancel(true);
-				}
-				throw e;
+			}
+			if (firstFailure != null) {
+				throw firstFailure;
 			}
 			return completed;
 		}
@@ -176,29 +179,24 @@ public class VaultService {
 		}
 
 		@Override
-		protected Vault call() throws Volume.VolumeException, LockNotCompletedException {
-			vault.lock(forced);
-			return vault;
-		}
-
-		@Override
-		protected void scheduled() {
-			vault.stateProperty().transition(VaultState.Value.UNLOCKED, VaultState.Value.PROCESSING);
-		}
-
-		@Override
-		protected void succeeded() {
-			vault.stateProperty().transition(VaultState.Value.PROCESSING, VaultState.Value.LOCKED);
-		}
-
-		@Override
-		protected void failed() {
-			vault.stateProperty().transition(VaultState.Value.PROCESSING, VaultState.Value.UNLOCKED);
-		}
-
-		@Override
-		protected void cancelled() {
-			vault.stateProperty().transition(VaultState.Value.PROCESSING, VaultState.Value.UNLOCKED);
+		protected Vault call() throws UnmountFailedException, IOException, InterruptedException {
+			var state = vault.stateProperty();
+			while (!state.transition(VaultState.Value.UNLOCKED, VaultState.Value.PROCESSING)) {
+				switch (state.get()) {
+					case UNLOCKED -> {} // settled by another workflow in the meantime, retry
+					case PROCESSING -> state.awaitStateOtherThan(VaultState.Value.PROCESSING);
+					default -> {
+						LOG.debug("Skipping lock of {}, which is not unlocked.", vault.getDisplayName());
+						return vault;
+					}
+				}
+			}
+			try {
+				vault.lock(forced);
+				return vault;
+			} finally {
+				vault.finishProcessing();
+			}
 		}
 
 	}

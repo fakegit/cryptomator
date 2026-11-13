@@ -20,14 +20,14 @@ public class VaultConfigCache {
 	private final VaultSettings settings;
 	private final AtomicReference<VaultConfig.UnverifiedVaultConfig> config;
 
-	VaultConfigCache(VaultSettings settings) {
+	public VaultConfigCache(VaultSettings settings) {
 		this.settings = settings;
 		this.config = new AtomicReference<>(null);
 	}
 
 	void reloadConfig() throws IOException {
 		try {
-			config.set(readConfigFromStorage(this.settings.path().get()));
+			config.set(readConfigFromStorage(this.settings.path.get()));
 		} catch (IOException e) {
 			config.set(null);
 			throw e;

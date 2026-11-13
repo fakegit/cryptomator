@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>LSMinimumSystemVersion</key>
-  <string>10.13.0</string>
+  <string>11</string>
   <key>CFBundleDevelopmentRegion</key>
   <string>English</string>
   <key>CFBundleAllowMixedLocalizations</key>
@@ -12,6 +12,8 @@
   <string>Cryptomator</string>
   <key>CFBundleIconFile</key>
   <string>Cryptomator.icns</string>
+  <key>CFBundleIconName</key>
+  <string>Cryptomator</string>
   <key>CFBundleIdentifier</key>
   <string>org.cryptomator</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -105,6 +107,7 @@
         <array>
           <string>c9r</string>
           <string>c9s</string>
+          <string>c9u</string>
         </array>
         <key>public.mime-type</key>
         <array>

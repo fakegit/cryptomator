@@ -1,7 +1,8 @@
 package org.cryptomator.ui.preferences;
 
+import org.cryptomator.common.Environment;
 import org.cryptomator.ui.common.FxController;
-import org.cryptomator.ui.fxapp.UpdateChecker;
+import org.cryptomator.updater.UpdateChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,21 +20,24 @@ public class PreferencesController implements FxController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(PreferencesController.class);
 
+	private final Environment env;
 	private final Stage window;
 	private final ObjectProperty<SelectedPreferencesTab> selectedTabProperty;
 	private final BooleanBinding updateAvailable;
 	public TabPane tabPane;
 	public Tab generalTab;
+	public Tab interfaceTab;
 	public Tab volumeTab;
 	public Tab updatesTab;
 	public Tab contributeTab;
 	public Tab aboutTab;
 
 	@Inject
-	public PreferencesController(@PreferencesWindow Stage window, ObjectProperty<SelectedPreferencesTab> selectedTabProperty, UpdateChecker updateChecker) {
+	public PreferencesController(Environment env, @PreferencesWindow Stage window, ObjectProperty<SelectedPreferencesTab> selectedTabProperty, UpdateChecker updateChecker) {
+		this.env = env;
 		this.window = window;
 		this.selectedTabProperty = selectedTabProperty;
-		this.updateAvailable = updateChecker.latestVersionProperty().isNotNull();
+		this.updateAvailable = updateChecker.updateAvailableProperty();
 	}
 
 	@FXML
@@ -41,6 +45,9 @@ public class PreferencesController implements FxController {
 		window.setOnShowing(this::windowWillAppear);
 		selectedTabProperty.addListener(observable -> this.selectChosenTab());
 		tabPane.getSelectionModel().selectedItemProperty().addListener(observable -> this.selectedTabChanged());
+		if (env.disableUpdateCheck()) {
+			tabPane.getTabs().remove(updatesTab);
+		}
 	}
 
 	private void selectChosenTab() {
@@ -50,10 +57,11 @@ public class PreferencesController implements FxController {
 
 	private Tab getTabToSelect(SelectedPreferencesTab selectedTab) {
 		return switch (selectedTab) {
-			case UPDATES -> updatesTab;
-			case VOLUME -> volumeTab;
-			case CONTRIBUTE -> contributeTab;
 			case GENERAL -> generalTab;
+			case INTERFACE -> interfaceTab;
+			case VOLUME -> volumeTab;
+			case UPDATES -> updatesTab;
+			case CONTRIBUTE -> contributeTab;
 			case ABOUT -> aboutTab;
 			case ANY -> updateAvailable.get() ? updatesTab : generalTab;
 		};

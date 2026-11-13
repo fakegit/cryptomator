@@ -1,11 +1,13 @@
 package org.cryptomator.common.vaults;
 
+import org.cryptomator.integrations.mount.UnmountFailedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javafx.collections.ObservableList;
+import java.io.IOException;
 import java.time.Instant;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -39,16 +41,17 @@ public class AutoLocker {
 		try {
 			vault.lock(false);
 			LOG.info("Autolocked {} after idle timeout", vault.getDisplayName());
-		} catch (Volume.VolumeException | LockNotCompletedException e) {
+		} catch (UnmountFailedException | IOException e) {
 			LOG.error("Autolocking failed.", e);
+		} finally {
+			vault.markLockedIfUnmounted();
 		}
 	}
 
 	private boolean exceedsIdleTime(Vault vault) {
 		assert vault.isUnlocked();
-		// TODO: shouldn't we read these properties from within FX Application Thread?
-		if (vault.getVaultSettings().autoLockWhenIdle().get()) {
-			int maxIdleSeconds = vault.getVaultSettings().autoLockIdleSeconds().get();
+		if (vault.getVaultSettings().autoLockWhenIdle.get()) {
+			int maxIdleSeconds = vault.getVaultSettings().autoLockIdleSeconds.get();
 			var deadline = vault.getStats().getLastActivity().plusSeconds(maxIdleSeconds);
 			return deadline.isBefore(Instant.now());
 		} else {

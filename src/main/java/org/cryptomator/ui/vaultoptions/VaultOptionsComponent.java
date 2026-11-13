@@ -28,21 +28,19 @@ public interface VaultOptionsComponent {
 
 	ObjectProperty<SelectedVaultOptionsTab> selectedTabProperty();
 
-	default void showVaultOptionsWindow(SelectedVaultOptionsTab selectedTab) {
+	default Stage showVaultOptionsWindow(SelectedVaultOptionsTab selectedTab) {
 		selectedTabProperty().set(selectedTab);
 		Stage stage = window();
 		stage.setScene(scene().get());
 		stage.show();
 		stage.requestFocus();
+		return stage;
 	}
 
-	@Subcomponent.Builder
-	interface Builder {
+	@Subcomponent.Factory
+	interface Factory {
 
-		@BindsInstance
-		Builder vault(@VaultOptionsWindow Vault vault);
-
-		VaultOptionsComponent build();
+		VaultOptionsComponent create(@BindsInstance @VaultOptionsWindow Vault vault);
 	}
 
 }

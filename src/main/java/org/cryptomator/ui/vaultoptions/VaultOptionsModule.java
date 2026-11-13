@@ -13,7 +13,9 @@ import org.cryptomator.ui.common.FxmlFile;
 import org.cryptomator.ui.common.FxmlLoaderFactory;
 import org.cryptomator.ui.common.FxmlScene;
 import org.cryptomator.ui.common.StageFactory;
-import org.cryptomator.ui.mainwindow.MainWindow;
+import org.cryptomator.ui.convertvault.ConvertVaultComponent;
+import org.cryptomator.ui.forgetpassword.ForgetPasswordComponent;
+import org.cryptomator.ui.fxapp.PrimaryStage;
 import org.cryptomator.ui.recoverykey.RecoveryKeyComponent;
 
 import javax.inject.Provider;
@@ -25,7 +27,7 @@ import javafx.stage.Stage;
 import java.util.Map;
 import java.util.ResourceBundle;
 
-@Module(subcomponents = {ChangePasswordComponent.class, RecoveryKeyComponent.class})
+@Module(subcomponents = {ChangePasswordComponent.class, RecoveryKeyComponent.class, ForgetPasswordComponent.class, ConvertVaultComponent.class})
 abstract class VaultOptionsModule {
 
 	@Provides
@@ -44,14 +46,14 @@ abstract class VaultOptionsModule {
 	@Provides
 	@VaultOptionsWindow
 	@VaultOptionsScoped
-	static Stage provideStage(StageFactory factory, @MainWindow Stage owner, @VaultOptionsWindow Vault vault) {
+	static Stage provideStage(StageFactory factory, @PrimaryStage Stage primaryStage, @VaultOptionsWindow Vault vault) {
 		Stage stage = factory.create();
 		stage.setTitle(vault.getDisplayName());
 		stage.setResizable(true);
 		stage.setMinWidth(400);
 		stage.setMinHeight(300);
 		stage.initModality(Modality.WINDOW_MODAL);
-		stage.initOwner(owner);
+		stage.initOwner(primaryStage);
 		return stage;
 	}
 
@@ -83,4 +85,9 @@ abstract class VaultOptionsModule {
 	@IntoMap
 	@FxControllerKey(MasterkeyOptionsController.class)
 	abstract FxController bindMasterkeyOptionsController(MasterkeyOptionsController controller);
+
+	@Binds
+	@IntoMap
+	@FxControllerKey(HubOptionsController.class)
+	abstract FxController bindHubOptionsController(HubOptionsController controller);
 }

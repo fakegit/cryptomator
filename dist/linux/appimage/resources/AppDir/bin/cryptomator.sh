@@ -16,25 +16,7 @@ elif command -v pacman &> /dev/null; then # don't forget arch
 fi
 
 if [ "$GTK2_PRESENT" -eq 0 ] && [ "$GTK3_PRESENT" -ne 0 ]; then
-	GTK_FLAG="-Djdk.gtk.version=2"
+	bin/Cryptomator-gtk2 $@
+else
+	bin/Cryptomator $@
 fi
-
-# workaround for https://github.com/cryptomator/cryptomator-linux/issues/27
-export LD_PRELOAD=lib/app/libjffi.so
-
-# start Cryptomator
-./lib/runtime/bin/java \
-	-p "lib/app/mods" \
-	-cp "lib/app/*" \
-	-Dfile.encoding="utf-8" \
-	-Dcryptomator.logDir="~/.local/share/Cryptomator/logs" \
-	-Dcryptomator.pluginDir="~/.local/share/Cryptomator/plugins" \
-	-Dcryptomator.mountPointsDir="~/.local/share/Cryptomator/mnt" \
-	-Dcryptomator.settingsPath="~/.config/Cryptomator/settings.json:~/.Cryptomator/settings.json" \
-	-Dcryptomator.ipcSocketPath="~/.config/Cryptomator/ipc.socket" \
-	-Dcryptomator.buildNumber="appimage-${REVISION_NO}" \
-	-Dcryptomator.appVersion="${SEMVER_STR}" \
-	$GTK_FLAG \
-	-Xss5m \
-	-Xmx256m \
-	-m org.cryptomator.desktop/org.cryptomator.launcher.Cryptomator

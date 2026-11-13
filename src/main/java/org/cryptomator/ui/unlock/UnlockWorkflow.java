@@ -1,30 +1,36 @@
 package org.cryptomator.ui.unlock;
 
-import com.google.common.base.Throwables;
 import dagger.Lazy;
-import org.cryptomator.common.mountpoint.InvalidMountPointException;
-import org.cryptomator.common.vaults.MountPointRequirement;
+import org.cryptomator.common.UnsupportedScryptParametersException;
+import org.cryptomator.common.mount.ConflictingMountServiceException;
+import org.cryptomator.common.mount.FSKitExtensionSwitchedOffException;
+import org.cryptomator.common.mount.IllegalMountPointException;
 import org.cryptomator.common.vaults.Vault;
-import org.cryptomator.common.vaults.VaultState;
-import org.cryptomator.common.vaults.Volume.VolumeException;
 import org.cryptomator.cryptolib.api.CryptoException;
-import org.cryptomator.ui.common.ErrorComponent;
+import org.cryptomator.cryptolib.api.MasterkeyLoadingFailedException;
+import org.cryptomator.integrations.mount.MountFailedException;
 import org.cryptomator.ui.common.FxmlFile;
 import org.cryptomator.ui.common.FxmlScene;
 import org.cryptomator.ui.common.VaultService;
+import org.cryptomator.ui.dialogs.Dialogs;
+import org.cryptomator.ui.fxapp.FxApplicationWindows;
+import org.cryptomator.ui.fxapp.PrimaryStage;
 import org.cryptomator.ui.keyloading.KeyLoadingStrategy;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
+import javax.inject.Named;
 import javafx.application.Platform;
+import javafx.beans.property.ObjectProperty;
 import javafx.concurrent.Task;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.Scene;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 import java.io.IOException;
-import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.NotDirectoryException;
+import java.nio.file.ReadOnlyFileSystemException;
 
 /**
  * A multi-step task that consists of background activities as well as user interaction.
@@ -32,97 +38,114 @@ import java.nio.file.NotDirectoryException;
  * This class runs the unlock process and controls when to display which UI.
  */
 @UnlockScoped
-public class UnlockWorkflow extends Task<Boolean> {
+public class UnlockWorkflow extends Task<Void> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(UnlockWorkflow.class);
 
+	private final Stage mainWindow;
 	private final Stage window;
+	private final Stage owner;
 	private final Vault vault;
 	private final VaultService vaultService;
 	private final Lazy<Scene> successScene;
 	private final Lazy<Scene> invalidMountPointScene;
-	private final ErrorComponent.Builder errorComponent;
+	private final Lazy<Scene> restartRequiredScene;
+	private final FxApplicationWindows appWindows;
 	private final KeyLoadingStrategy keyLoadingStrategy;
+	private final ObjectProperty<IllegalMountPointException> illegalMountPointException;
+	private final Dialogs dialogs;
 
 	@Inject
-	UnlockWorkflow(@UnlockWindow Stage window, @UnlockWindow Vault vault, VaultService vaultService, @FxmlScene(FxmlFile.UNLOCK_SUCCESS) Lazy<Scene> successScene, @FxmlScene(FxmlFile.UNLOCK_INVALID_MOUNT_POINT) Lazy<Scene> invalidMountPointScene, ErrorComponent.Builder errorComponent, @UnlockWindow KeyLoadingStrategy keyLoadingStrategy) {
+	UnlockWorkflow(@PrimaryStage Stage mainWindow, //
+				   @UnlockWindow Stage window, //
+				   @Nullable @Named("unlockWindowOwner") Stage owner, //
+				   @UnlockWindow Vault vault, //
+				   VaultService vaultService, //
+				   @FxmlScene(FxmlFile.UNLOCK_SUCCESS) Lazy<Scene> successScene, //
+				   @FxmlScene(FxmlFile.UNLOCK_INVALID_MOUNT_POINT) Lazy<Scene> invalidMountPointScene, //
+				   @FxmlScene(FxmlFile.UNLOCK_REQUIRES_RESTART) Lazy<Scene> restartRequiredScene, //
+				   FxApplicationWindows appWindows, //
+				   @UnlockWindow KeyLoadingStrategy keyLoadingStrategy, //
+				   @UnlockWindow ObjectProperty<IllegalMountPointException> illegalMountPointException, //
+				   Dialogs dialogs) {
+		this.mainWindow = mainWindow;
 		this.window = window;
+		this.owner = owner;
 		this.vault = vault;
 		this.vaultService = vaultService;
 		this.successScene = successScene;
 		this.invalidMountPointScene = invalidMountPointScene;
-		this.errorComponent = errorComponent;
+		this.restartRequiredScene = restartRequiredScene;
+		this.appWindows = appWindows;
 		this.keyLoadingStrategy = keyLoadingStrategy;
+		this.illegalMountPointException = illegalMountPointException;
+		this.dialogs = dialogs;
 	}
 
 	@Override
-	protected Boolean call() throws InterruptedException, IOException, VolumeException, InvalidMountPointException, CryptoException {
-		try {
-			attemptUnlock();
-			return true;
-		} catch (UnlockCancelledException e) {
-			cancel(false); // set Tasks state to cancelled
-			return false;
-		}
-	}
-
-	private void attemptUnlock() throws IOException, VolumeException, InvalidMountPointException, CryptoException {
+	protected Void call() throws InterruptedException, IOException, CryptoException, MountFailedException {
 		try {
 			keyLoadingStrategy.use(vault::unlock);
+			return null;
+		} catch (UnlockCancelledException e) {
+			cancel(false); // set Tasks state to cancelled
+			return null;
+		} catch (IOException | RuntimeException | MountFailedException e) {
+			throw e;
 		} catch (Exception e) {
-			Throwables.propagateIfPossible(e, IOException.class);
-			Throwables.propagateIfPossible(e, VolumeException.class);
-			Throwables.propagateIfPossible(e, InvalidMountPointException.class);
-			Throwables.propagateIfPossible(e, CryptoException.class);
-			throw new IllegalStateException("unexpected exception type", e);
+			throw new IllegalStateException("Unexpected exception type", e);
+		} finally {
+			vault.finishProcessing();
 		}
 	}
 
-	private void handleInvalidMountPoint(InvalidMountPointException impExc) {
-		MountPointRequirement requirement = vault.getVolume().orElseThrow(() -> new IllegalStateException("Invalid Mountpoint without a Volume?!", impExc)).getMountPointRequirement();
-		assert requirement != MountPointRequirement.NONE; //An invalid MountPoint with no required MountPoint doesn't seem sensible
-		assert requirement != MountPointRequirement.PARENT_OPT_MOUNT_POINT; //Not implemented anywhere (yet)
-
-		Throwable cause = impExc.getCause();
-		// TODO: apply https://openjdk.java.net/jeps/8213076 in future JDK versions
-		if (cause instanceof NotDirectoryException) {
-			if (requirement == MountPointRequirement.PARENT_NO_MOUNT_POINT) {
-				LOG.error("Unlock failed. Parent folder is missing: {}", cause.getMessage());
-			} else {
-				LOG.error("Unlock failed. Mountpoint doesn't exist (needs to be a folder): {}", cause.getMessage());
-			}
-			showInvalidMountPointScene();
-		} else if (cause instanceof FileAlreadyExistsException) {
-			LOG.error("Unlock failed. Mountpoint already exists: {}", cause.getMessage());
-			showInvalidMountPointScene();
-		} else if (cause instanceof DirectoryNotEmptyException) {
-			LOG.error("Unlock failed. Mountpoint not an empty directory: {}", cause.getMessage());
-			showInvalidMountPointScene();
-		} else {
-			handleGenericError(impExc);
-		}
-	}
-
-	private void showInvalidMountPointScene() {
+	private void handleIllegalMountPointError(IllegalMountPointException impe) {
 		Platform.runLater(() -> {
+			illegalMountPointException.set(impe);
 			window.setScene(invalidMountPointScene.get());
+			window.show();
+		});
+	}
+
+	private void handleConflictingMountServiceException() {
+		Platform.runLater(() -> {
+			window.setScene(restartRequiredScene.get());
 			window.show();
 		});
 	}
 
 	private void handleGenericError(Throwable e) {
 		LOG.error("Unlock failed for technical reasons.", e);
-		errorComponent.cause(e).window(window).build().showErrorScene();
+		appWindows.showErrorWindow(e, window, null);
 	}
 
 	@Override
 	protected void succeeded() {
 		LOG.info("Unlock of '{}' succeeded.", vault.getDisplayName());
 
-		switch (vault.getVaultSettings().actionAfterUnlock().get()) {
+		if (!vault.isUnlocked()) {
+			LOG.info("Volume of '{}' ended before its unlock completed.", vault.getDisplayName());
+			Platform.runLater(window::close);
+			return;
+		}
+
+		switch (vault.getVaultSettings().actionAfterUnlock.get()) {
 			case ASK -> Platform.runLater(() -> {
 				window.setScene(successScene.get());
 				window.show();
+				double x = mainWindow.getX() + (mainWindow.getWidth() - window.getWidth()) / 2;
+				double y = mainWindow.getY() + (mainWindow.getHeight() - window.getHeight()) / 2;
+				if(!mainWindow.isShowing()) {
+					Screen screen = Screen.getScreensForRectangle(mainWindow.getX(), mainWindow.getY(), mainWindow.getWidth(), mainWindow.getHeight())
+							.stream()
+							.findFirst()
+							.orElse(Screen.getPrimary());
+					Rectangle2D bounds = screen.getVisualBounds();
+					x = bounds.getMinX() + (bounds.getWidth() - window.getWidth()) / 2;
+					y = bounds.getMinY() + (bounds.getHeight() - window.getHeight()) / 2;
+				}
+				window.setX(x);
+				window.setY(y);
 			});
 			case REVEAL -> {
 				Platform.runLater(window::close);
@@ -130,26 +153,56 @@ public class UnlockWorkflow extends Task<Boolean> {
 			}
 			case IGNORE -> Platform.runLater(window::close);
 		}
-
-		vault.stateProperty().transition(VaultState.Value.PROCESSING, VaultState.Value.UNLOCKED);
 	}
 
 	@Override
 	protected void failed() {
 		LOG.info("Unlock of '{}' failed.", vault.getDisplayName());
 		Throwable throwable = super.getException();
-		if (throwable instanceof InvalidMountPointException e) {
-			handleInvalidMountPoint(e);
-		} else {
-			handleGenericError(throwable);
+		switch (throwable) {
+			case IllegalMountPointException e -> handleIllegalMountPointError(e);
+			case ConflictingMountServiceException _ -> handleConflictingMountServiceException();
+			case ReadOnlyFileSystemException _ -> handleReadOnlyFileSystem();
+			case FSKitExtensionSwitchedOffException _ -> handleExtensionSwitchedOff();
+			case MasterkeyLoadingFailedException e when e.getCause() instanceof UnsupportedScryptParametersException uspe -> handleUnsupportedScryptParameters(uspe);
+			default -> handleGenericError(throwable);
 		}
-		vault.stateProperty().transition(VaultState.Value.PROCESSING, VaultState.Value.LOCKED);
+	}
+
+	private void handleReadOnlyFileSystem() {
+		var readOnlyDialog = dialogs.prepareRetryIfReadonlyDialog(mainWindow, stage -> {
+			stage.close();
+			vault.getVaultSettings().usesReadOnlyMode.set(true);
+			appWindows.startUnlockWorkflow(vault, owner);
+		}).build();
+
+		Platform.runLater(readOnlyDialog::showAndWait);
+	}
+
+	private void handleExtensionSwitchedOff() {
+		var extensionSwitchedOffDialog = dialogs.prepareFSKitExtensionSwitchedOffDialog(mainWindow, vault, stage -> {
+			stage.close();
+			appWindows.startUnlockWorkflow(vault, owner);
+		}).build();
+
+		Platform.runLater(() -> {
+			window.close();
+			extensionSwitchedOffDialog.showAndWait();
+		});
+	}
+
+	private void handleUnsupportedScryptParameters(UnsupportedScryptParametersException e) {
+		LOG.warn("Rejected masterkey file of '{}': {}", vault.getDisplayName(), e.getMessage());
+		var dialog = dialogs.prepareUnsupportedScryptParameters(mainWindow, "unlock.error.title", vault.getDisplayName()).build();
+		Platform.runLater(() -> {
+			window.close();
+			dialog.showAndWait();
+		});
 	}
 
 	@Override
 	protected void cancelled() {
 		LOG.debug("Unlock of '{}' canceled.", vault.getDisplayName());
-		vault.stateProperty().transition(VaultState.Value.PROCESSING, VaultState.Value.LOCKED);
 	}
 
 }
